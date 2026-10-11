@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opinionradar.collect</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__APP_DIR__/.venv/bin/opinion-radar</string>
+        <string>run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__APP_DIR__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__APP_DIR__/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>OPINION_RADAR_CONFIG</key>
+        <string>__APP_DIR__/config/config.yaml</string>
+    </dict>
+
+    <!-- 每 3600 秒一次；加载/登录时立即执行一次 -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__APP_DIR__/data/logs/launchd-collect.out</string>
+    <key>StandardErrorPath</key>
+    <string>__APP_DIR__/data/logs/launchd-collect.err</string>
+</dict>
+</plist>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opinionradar.digest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__APP_DIR__/.venv/bin/opinion-radar</string>
+        <string>digest</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__APP_DIR__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__APP_DIR__/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>OPINION_RADAR_CONFIG</key>
+        <string>__APP_DIR__/config/config.yaml</string>
+    </dict>
+
+    <!-- 每天 20:00（时间以 config.yaml notify.daily_digest.time 为准，修改模板后重装） -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>20</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__APP_DIR__/data/logs/launchd-digest.out</string>
+    <key>StandardErrorPath</key>
+    <string>__APP_DIR__/data/logs/launchd-digest.err</string>
+</dict>
+</plist>
