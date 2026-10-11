@@ -33,6 +33,39 @@ class CollectorConfig(BaseModel):
     interval_jitter_seconds: float = 30.0
     request_timeout_seconds: float = 15.0
     page_size: int = 20
+    # 无持久化 last_seen 时（discover 探测 / 首轮运行）向回看多长时间
+    lookback_hours: float = 24.0
+
+
+class BrowserConfig(BaseModel):
+    """Playwright 真实浏览器采集配置（决策见 ADR-0005）。
+
+    所有节奏参数都是风控基线，禁止为追求速度调小到人类操作区间以下。
+    """
+
+    # 持久化 profile：保存登录 cookie 与浏览器指纹，位于 data/（已 gitignore）
+    profile_dir: Path = Path("./data/browser-profile")
+    # 日常 headless 运行；登录 / 验证码人工介入时用有头模式
+    headless: bool = True
+    # 浏览器渠道：None=Playwright 自带 Chromium；"chrome"=本机安装的 Google Chrome
+    # （新无头模式指纹更接近真人，已装 Chrome 时建议设为 chrome）
+    channel: str | None = None
+    # 页面动作（滚动 / 翻页）之间的随机停顿区间，模拟真人阅读
+    action_delay_min_seconds: float = 2.0
+    action_delay_max_seconds: float = 8.0
+    # 单次滚动后等待新动态加载的停顿区间
+    scroll_wait_min_seconds: float = 2.5
+    scroll_wait_max_seconds: float = 6.0
+    # 单轮采集的硬上限：滚动次数 / 拦截到的 feed 响应数，防止请求量失控
+    max_scrolls: int = 15
+    max_feed_responses: int = 20
+    navigation_timeout_seconds: float = 45.0
+    # 首个动态流响应等待时长：B 站空间页的 feed 请求在瀑布流末尾，实测约 20~35s
+    feed_response_timeout_seconds: float = 60.0
+    # 登录命令等待扫码的最长时间
+    login_timeout_seconds: float = 300.0
+    # 触发风控熔断后的冷却时间，期间不再启动浏览器采集
+    block_cooldown_minutes: int = 1440
 
 
 class LLMConfig(BaseModel):
@@ -75,6 +108,7 @@ class AppConfig(BaseModel):
 
     sources: list[SourceConfig] = Field(default_factory=list)
     collector: CollectorConfig = Field(default_factory=CollectorConfig)
+    browser: BrowserConfig = Field(default_factory=BrowserConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     ocr: OcrConfig = Field(default_factory=OcrConfig)
@@ -92,6 +126,7 @@ class Secrets(BaseSettings):
         extra="ignore",
     )
 
+    # 已废弃：ADR-0005 后改由浏览器持久化 profile 持有登录态（opinion-radar bilibili-login）
     bilibili_sessdata: str | None = None
     serverchan_sendkey: str | None = None
     pushplus_token: str | None = None

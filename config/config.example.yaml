@@ -13,6 +13,23 @@ collector:
   interval_jitter_seconds: 30  # 随机抖动上限（秒）
   request_timeout_seconds: 15
   page_size: 20
+  lookback_hours: 24           # discover 探测 / 首轮运行向回看的时长
+
+# Playwright 真实浏览器采集（ADR-0005；需先 uv sync --extra browser && playwright install chromium）
+browser:
+  profile_dir: "./data/browser-profile"  # 登录态与指纹，已 gitignore，勿提交勿外传
+  headless: true             # 日常无头运行；首次登录用 opinion-radar bilibili-login（有头扫码）
+  channel: null              # 装了 Google Chrome 可设 "chrome"，新无头模式指纹更接近真人
+  action_delay_min_seconds: 2.0   # 以下节奏参数即风控基线，不建议调小
+  action_delay_max_seconds: 8.0
+  scroll_wait_min_seconds: 2.5
+  scroll_wait_max_seconds: 6.0
+  max_scrolls: 15
+  max_feed_responses: 20
+  navigation_timeout_seconds: 45
+  feed_response_timeout_seconds: 60   # feed 请求在空间页瀑布流末尾，实测约 20~35s
+  login_timeout_seconds: 300
+  block_cooldown_minutes: 1440    # 触发风控后冷却 24h，不重试硬闯
 
 # 本地大模型（Ollama，OpenAI 兼容协议）
 llm:

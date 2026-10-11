@@ -1,0 +1,114 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "has_more": true,
+    "offset": "7890000000000000000",
+    "items": [
+      {
+        "id_str": "7890000000000000001",
+        "type": "DYNAMIC_TYPE_AV",
+        "modules": {
+          "module_author": {
+            "mid": "90001",
+            "name": "示例财经博主",
+            "pub_ts": 1791633600,
+            "pub_action": "发布了视频"
+          },
+          "module_tag": { "text": "置顶" },
+          "module_dynamic": {
+            "major": {
+              "archive": {
+                "bvid": "BV1TEST0001",
+                "title": "四季度行情怎么看",
+                "desc": "本期聊聊四季度的指数与行业配置。",
+                "short_link_url": "https://b23.tv/abcdef",
+                "duration_text": "12:34"
+              }
+            }
+          }
+        }
+      },
+      {
+        "id_str": "7890000000000000002",
+        "type": "DYNAMIC_TYPE_WORD",
+        "modules": {
+          "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791637200 },
+          "module_dynamic": {
+            "desc": { "text": "刚出的社融数据偏弱，短期对成长板块保持谨慎。" }
+          }
+        }
+      },
+      {
+        "id_str": "7890000000000000003",
+        "type": "DYNAMIC_TYPE_DRAW",
+        "modules": {
+          "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791640800 },
+          "module_dynamic": {
+            "desc": { "text": "今天路演的几张关键图表" },
+            "major": {
+              "draw": {
+                "items": [
+                  { "src": "http://i0.hdslb.com/bfs/new_dyn/pic1.jpg", "width": 1080, "height": 1440 },
+                  { "src": "https://i0.hdslb.com/bfs/new_dyn/pic2.jpg", "width": 1080, "height": 1440 }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "id_str": "7890000000000000004",
+        "type": "DYNAMIC_TYPE_ARTICLE",
+        "modules": {
+          "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791644400 },
+          "module_dynamic": {
+            "major": {
+              "opus": {
+                "title": "周观点：红利资产的再定价",
+                "summary_text": "本周讨论红利风格的估值修复空间与利率环境。",
+                "jump_url": "https://www.bilibili.com/opus/7890000000000000004",
+                "pics": [{ "url": "http://i0.hdslb.com/bfs/new_dyn/opus1.jpg" }]
+              }
+            }
+          }
+        }
+      },
+      {
+        "id_str": "7890000000000000005",
+        "type": "DYNAMIC_TYPE_FORWARD",
+        "modules": {
+          "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791648000 },
+          "module_dynamic": {
+            "desc": { "text": "这份宏观研报的框架值得参考，利率部分我有不同看法。" }
+          }
+        },
+        "orig": {
+          "id_str": "7890000000000000099",
+          "type": "DYNAMIC_TYPE_ARTICLE",
+          "modules": {
+            "module_dynamic": {
+              "major": { "opus": { "title": "某机构宏观框架长文", "summary_text": "..." } }
+            }
+          }
+        }
+      },
+      {
+        "id_str": "7890000000000000006",
+        "type": "DYNAMIC_TYPE_LIVE_RCMD",
+        "modules": {
+          "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791651600 },
+          "module_dynamic": { "major": { "live_rcmd": {} } }
+        }
+      },
+      {
+        "id_str": "7890000000000000007",
+        "type": "DYNAMIC_TYPE_MUSIC",
+        "modules": {
+          "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791655200 },
+          "module_dynamic": { "major": { "music": {} } }
+        }
+      }
+    ]
+  }
+}

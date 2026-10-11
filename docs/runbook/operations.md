@@ -27,28 +27,42 @@ make launchd-uninstall
 plist 位置：`~/Library/LaunchAgents/com.opinionradar.{collect,digest}.plist`（由模板生成，勿手改，
 改模板后重新 install）。
 
-## 3. 获取 / 更新 B站 SESSDATA（迭代 002 起需要）
+## 3. B 站浏览器登录态（ADR-0005 起）
 
-1. Mac 浏览器登录 B 站 → 开发者工具 → Application/存储 → Cookies → `https://www.bilibili.com`。
-2. 复制 `SESSDATA` 的值，填入 `.env` 的 `OPINION_RADAR_BILIBILI_SESSDATA`。
-3. 重新跑一轮：`launchctl kickstart -k gui/$UID/com.opinionradar.collect`。
+采集由 Playwright 持久化浏览器完成，不再手动复制 SESSDATA。
 
-失效现象：付费内容接口返回未登录/`-101`。SESSDATA 有效期较长，但改密码、退登会使其失效，
-重新获取即可。**不要把该值发给任何人、不要贴进 Issue/截图。**
+首次使用（或登录态失效后）：
+
+```bash
+uv sync --extra browser
+uv run playwright install chromium      # 仅首次需要
+opinion-radar bilibili-login            # 有头浏览器，用专用小号扫码
+opinion-radar discover --headed         # 登录后先用探测命令验证
+```
+
+- 登录态与浏览器指纹保存在 `config.yaml` 的 `browser.profile_dir`（默认
+  `data/browser-profile`），已 gitignore；**只在本机使用，不提交、不外传、不与其他脚本共用**。
+- 失效现象：discover / run 报「登录态缺失」或被重定向到登录页（code=-101），
+  重新执行 `bilibili-login` 即可。
+- launchd 以 headless 复用该 profile；profile 目录随 `data/` 一起备份。
 
 ## 4. B站风控应对
 
-现象：接口返回 `-352` / `-799` / HTTP 412，或日志出现风控警告。
+现象：日志出现「命中风控」、验证码弹层，或接口返回 `-352` / `-412` / `-799`。
 
 处置原则（代码已内置，运维侧只做观察与降级）：
 
-- 单轮立即**中止**（不带病继续请求），等下个调度周期；
-- 连续两轮触发：调大 `config.yaml` 中 `min_interval_seconds`（如 6→15）与抖动；
+- 命中风控 / 验证码 / 登录跳转时单轮立即**熔断中止**（不带病继续请求），
+  并写入冷却标记 `data/.bilibili_blocked_until`；冷却期（默认 24h）内启动采集会直接跳过；
+- 需要人工确认时用有头模式观察：`opinion-radar discover --headed`；
+  确认页面正常后删除冷却标记即可恢复；
+- 连续触发：调大 `browser.action_delay_*` / `scroll_wait_*`，调小 `max_scrolls`；
 - 一天内反复触发：暂停任务 24~48 小时：
   `launchctl bootout gui/$(id -u)/com.opinionradar.collect`；
-- 检查是否与其他 B 站脚本/浏览器插件共用账号高频访问。
+- 检查是否与其他 B 站脚本/浏览器插件共用账号、或同一账号在多处并发访问。
 
-绝对不要为了赶内容而调高并发或删除 sleep——个人使用，稳定与账号安全优先。
+绝对不要为了赶内容而调小人类节奏参数、开并发或手动删除冷却标记硬闯——
+个人使用，稳定与账号安全优先。
 
 ## 5. Ollama / 模型问题
 

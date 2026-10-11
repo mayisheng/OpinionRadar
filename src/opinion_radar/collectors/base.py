@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from opinion_radar.config import CollectorConfig, Secrets, SourceConfig
+from opinion_radar.config import BrowserConfig, CollectorConfig, Secrets, SourceConfig
 from opinion_radar.domain.models import ContentItem, Platform
 
 
@@ -23,10 +23,13 @@ class Connector(ABC):
         source: SourceConfig,
         collector_config: CollectorConfig,
         secrets: Secrets,
+        browser_config: BrowserConfig | None = None,
     ) -> None:
         self.source = source
         self.collector_config = collector_config
         self.secrets = secrets
+        # 浏览器采集配置（ADR-0005）；非浏览器平台不用，给默认值即可
+        self.browser_config = browser_config or BrowserConfig()
 
     @abstractmethod
     def list_updates(self, since: datetime) -> list[ContentItem]:

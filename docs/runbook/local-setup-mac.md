@@ -18,12 +18,14 @@ brew install uv
 cd OpinionRadar
 
 make install
-# 等价于：uv sync --extra audio --extra ocr && uv run pre-commit install
+# 等价于：uv sync --extra browser --extra audio --extra ocr
+#        && uv run playwright install chromium && uv run pre-commit install
 ```
 
 - Python 3.12 由 uv 自动下载到虚拟环境 `.venv/`，不影响系统 Python。
+- `browser` extra 含 Playwright，`playwright install chromium` 下载浏览器运行时（约 130MB，仅首次）。
 - `audio` extra 含 yt-dlp 与 mlx-whisper（首次安装稍慢）；`ocr` 含 RapidOCR。
-- 若只想跑最小环境：`uv sync`（不含转写/OCR）。
+- 若只想跑最小环境：`uv sync`（不含浏览器/转写/OCR，但无法采集）。
 
 ## 3. 配置博主与密钥
 
@@ -41,10 +43,22 @@ cp .env.example .env
 
 - `OPINION_RADAR_SERVERCHAN_SENDKEY`：打开 <https://sct.ftqq.com/> 微信扫码登录，
   复制 SendKey。
-- `OPINION_RADAR_BILIBILI_SESSDATA`：迭代 001 只处理公开视频，**可留空**；
-  迭代 002 需要时按[运维手册](operations.md#获取-b站-sessdata)填写。
+- B 站无需配置任何 Cookie：登录态由浏览器 profile 持有（见下一节），
+  `OPINION_RADAR_BILIBILI_SESSDATA` 已废弃，留空即可。
 
 > `.env` 与 `config/config.yaml` 均已在 `.gitignore`，不会被提交。
+
+## 3.5 B 站浏览器登录与采集验证（ADR-0005）
+
+```bash
+make bilibili-login      # 弹出有头浏览器，用专用小号扫码（切勿使用主号）
+make discover            # headless 真实拉取近 24h 动态并打印，不写库不推送
+# 需要观察页面动作 / 调整时间窗：
+uv run --extra browser opinion-radar discover --headed --hours 48
+```
+
+`discover` 能打印出博主近期图文 / 视频动态，即说明拦截链路与登录态正常；
+报风控/登录失效时按[运维手册](operations.md#3-b-站浏览器登录态adr-0005-起)处理。
 
 ## 4. 拉取并验证本地模型
 
@@ -96,8 +110,8 @@ tail -f data/logs/opinion_radar.log
 ## 7. 更新与卸载
 
 ```bash
-git pull && uv sync --extra audio --extra ocr   # 更新代码与依赖
-make launchd-install                            # 重装（幂等，会刷新 plist）
+git pull && uv sync --extra browser --extra audio --extra ocr   # 更新代码与依赖
+make launchd-install                                          # 重装（幂等，会刷新 plist）
 
 make launchd-uninstall                          # 停止并移除两个定时任务
 ```

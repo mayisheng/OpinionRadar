@@ -1,6 +1,6 @@
 # ADR-0003：可插拔 Connector 抽象 + B站 httpx 直连
 
-- 状态：Accepted
+- 状态：Superseded by ADR-0005（仅限「B站 httpx 直连」决策；Connector 抽象继续有效）
 - 日期：2026-10-11
 
 ## 背景
