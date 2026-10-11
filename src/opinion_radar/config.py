@@ -62,6 +62,8 @@ class BrowserConfig(BaseModel):
     navigation_timeout_seconds: float = 45.0
     # 首个动态流响应等待时长：B 站空间页的 feed 请求在瀑布流末尾，实测约 20~35s
     feed_response_timeout_seconds: float = 60.0
+    # 单条动态详情页的接口响应等待时长（详情请求在页面加载早期发出）
+    detail_response_timeout_seconds: float = 20.0
     # 登录命令等待扫码的最长时间
     login_timeout_seconds: float = 300.0
     # 触发风控熔断后的冷却时间，期间不再启动浏览器采集

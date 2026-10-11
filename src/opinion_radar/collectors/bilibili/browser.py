@@ -17,7 +17,14 @@ from typing import Any
 
 from loguru import logger
 
-from opinion_radar.collectors.bilibili.feed import FEED_API_MARKER, FeedPage, parse_feed_page
+from opinion_radar.collectors.bilibili.feed import (
+    DETAIL_API_MARKERS,
+    DYNAMIC_URL_TEMPLATE,
+    FEED_API_MARKER,
+    FeedPage,
+    parse_detail_item,
+    parse_feed_page,
+)
 from opinion_radar.collectors.exceptions import (
     BrowserRuntimeMissingError,
     CollectorError,
@@ -255,6 +262,92 @@ class BilibiliBrowser:
                     break
 
         return collected
+
+    def fetch_dynamic_details(self, dynamic_ids: list[str], *, uid: str) -> dict[str, ContentItem]:
+        """批量打开动态详情页，拦截 detail 响应，返回 dynamic_id → ContentItem。
+
+        单个浏览器会话内逐条访问（条间人类节奏停顿），单条失败只记日志不中断整批；
+        命中风控 / 登录失效仍然熔断抛出。
+        """
+        self._enforce_cooldown()
+        if not self.is_logged_in():
+            raise LoginRequiredError("浏览器 profile 未登录：请先执行 opinion-radar bilibili-login")
+
+        context = self._require_context()
+        results: dict[str, ContentItem] = {}
+        timeout = self.config.detail_response_timeout_seconds
+
+        for index, dynamic_id in enumerate(dynamic_ids):
+            page = context.new_page()
+            try:
+                if index > 0:
+                    self._human_pause(
+                        page,
+                        self.config.action_delay_min_seconds,
+                        self.config.action_delay_max_seconds,
+                    )
+                item = self._fetch_one_detail(page, dynamic_id, uid=uid, timeout=timeout)
+            finally:
+                page.close()
+            if item is not None:
+                results[dynamic_id] = item
+
+        logger.info(f"dynamic_details_done total={len(dynamic_ids)} ok={len(results)}")
+        return results
+
+    def _fetch_one_detail(
+        self, page: Any, dynamic_id: str, *, uid: str, timeout: float
+    ) -> ContentItem | None:
+        """在给定页面上打开单条动态详情页，拦截 detail 响应；失败返回 None。"""
+        captured: list[dict[str, Any]] = []
+
+        def _on_response(response: Any) -> None:
+            if not any(marker in response.url for marker in DETAIL_API_MARKERS):
+                return
+            try:
+                payload = response.json()
+            except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
+                logger.debug(f"detail response unreadable: {exc}")
+                return
+            captured.append(payload)
+
+        page.on("response", _on_response)
+        url = DYNAMIC_URL_TEMPLATE.format(dynamic_id=dynamic_id)
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+        try:
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+            except PlaywrightTimeoutError as exc:
+                raise CollectorTimeout(f"打开动态详情页超时：{url}") from exc
+            except PlaywrightError as exc:
+                raise CollectorError(f"浏览器打开动态详情页失败：{exc}") from exc
+            self._wait_captures(page, captured, 0, timeout)
+            self._raise_if_blocked(page)
+        except RiskControlBlocked:
+            self._write_cooldown()
+            raise
+        except CollectorError as exc:
+            logger.warning(f"dynamic_detail_failed id={dynamic_id} error={exc}")
+            return None
+
+        # 详情页可能顺带加载其它动态的 detail 响应，逐条解析后按 id 匹配目标
+        for payload in captured:
+            try:
+                item = parse_detail_item(payload, source_uid=uid)
+            except (RiskControlBlocked, LoginRequiredError):
+                self._write_cooldown()
+                raise
+            except CollectorError as exc:
+                logger.debug(f"detail parse skipped id={dynamic_id} error={exc}")
+                continue
+            if item.external_id == dynamic_id:
+                dyn_type = item.payload.get("dynamic_type")
+                logger.info(f"dynamic_detail_ok id={dynamic_id} type={dyn_type}")
+                return item
+        logger.warning(f"dynamic_detail_missing id={dynamic_id} captures={len(captured)}")
+        return None
 
     def _raise_if_blocked(self, page: Any) -> None:
         """检查登录跳转与验证码弹层，命中即抛风控 / 登录异常。"""

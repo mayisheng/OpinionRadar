@@ -5,6 +5,7 @@
     opinion-radar bilibili-login  有头浏览器扫码登录，持久化登录态（ADR-0005）
     opinion-radar discover        探测：真实拉取空间动态流并打印，不写库不推送
     opinion-radar archive         回溯归档：抓取指定年份以来全部动态，写入本地 JSON
+    opinion-radar backfill-detail 回填归档中缺正文/图片的图文动态详情
     opinion-radar run --dry-run   演练模式：只打印管线计划
     opinion-radar run             执行一次采集 → 提取 → 分析 → 推送（迭代 001）
     opinion-radar digest          生成并推送每日观点汇总（迭代 004）
@@ -33,7 +34,13 @@ from opinion_radar.config import (
     load_runtime_config,
 )
 from opinion_radar.pipeline import Pipeline
-from opinion_radar.storage.archive import archive_items
+from opinion_radar.storage.archive import (
+    archive_items,
+    load_archive_items,
+    merge_detail,
+    needs_detail,
+    overwrite_archive_item,
+)
 from opinion_radar.utils.logging import configure_logging
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="B 站财经观点雷达")
@@ -237,6 +244,65 @@ def archive(
         written, skipped = archive_items(items, uid=connector.source.uid)
         typer.secho(
             f"归档完成：新写入 {len(written)} 条，跳过已存在 {skipped} 条", fg=typer.colors.GREEN
+        )
+
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("backfill-detail")
+def backfill_detail(
+    limit: int | None = typer.Option(
+        None, "--limit", help="本轮最多回填条数（风控友好，可分批执行）"
+    ),
+    headed: bool = typer.Option(False, "--headed", help="有头模式运行，便于观察页面与人工介入"),
+) -> None:
+    """回填归档中缺正文 / 图片的图文动态详情（详情页拦截，只写本地 data/archive/）。"""
+    runtime = _load_or_exit()
+    configure_logging(runtime.app.log_level)
+    if headed:
+        runtime.app.browser.headless = False
+
+    failed = False
+    for connector in build_connectors(runtime):
+        uid = connector.source.uid
+        name = connector.source.name or uid
+        typer.echo(f"\n== {name}（uid={uid}）==")
+        pending = [(path, item) for path, item in load_archive_items(uid) if needs_detail(item)]
+        if not pending:
+            typer.secho("归档中没有缺详情的图文动态", fg=typer.colors.YELLOW)
+            continue
+        if limit is not None:
+            pending = pending[:limit]
+        typer.echo(f"待回填 {len(pending)} 条，将逐条打开动态详情页（人类节奏）…")
+
+        try:
+            details = connector.fetch_details([item for _, item in pending])
+        except LoginRequiredError as exc:
+            typer.secho(f"[FAIL] {exc}，请先执行 opinion-radar bilibili-login", fg=typer.colors.RED)
+            failed = True
+            continue
+        except RiskControlBlocked as exc:
+            typer.secho(f"[FAIL] 命中风控已熔断：{exc}", fg=typer.colors.RED)
+            failed = True
+            continue
+        except (BrowserRuntimeMissingError, CollectorError) as exc:
+            typer.secho(f"[FAIL] 采集失败：{exc}", fg=typer.colors.RED)
+            failed = True
+            continue
+
+        written = 0
+        for path, item in pending:
+            dynamic_id = str(item.payload.get("dynamic_id") or item.external_id)
+            detail = details.get(dynamic_id)
+            if detail is None:
+                typer.secho(f"[WARN] 详情未获取到，跳过：{dynamic_id}", fg=typer.colors.YELLOW)
+                continue
+            overwrite_archive_item(path, merge_detail(item, detail))
+            written += 1
+        typer.secho(
+            f"回填完成：更新 {written} 条，未获取 {len(pending) - written} 条",
+            fg=typer.colors.GREEN,
         )
 
     if failed:

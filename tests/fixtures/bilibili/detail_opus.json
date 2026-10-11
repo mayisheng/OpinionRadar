@@ -1,0 +1,28 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "item": {
+      "id_str": "7890000000000000008",
+      "type": "DYNAMIC_TYPE_OPUS",
+      "modules": {
+        "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791658800 },
+        "module_dynamic": {
+          "major": {
+            "opus": {
+              "title": "周观点：红利资产的再定价",
+              "summary": {
+                "has_more": false,
+                "paragraphs": [],
+                "rich_text_nodes": [],
+                "text": "本周讨论红利风格的估值修复空间与利率环境。"
+              },
+              "jump_url": "https://www.bilibili.com/opus/7890000000000000008",
+              "pics": [{ "url": "http://i0.hdslb.com/bfs/new_dyn/opus_c.jpg" }]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 """B 站采集器：Playwright 真实浏览器响应拦截实现（ADR-0005）。
 
-当前阶段（迭代 001 第一段）：空间动态流增量发现（图文 / 视频 / 转发）。
-后续阶段：播放页字幕拦截（fetch_detail）、评论区博主回复抓取。
+当前阶段（迭代 001 第二段）：动态流增量发现 + 动态详情（正文/图片）拦截。
+后续阶段：播放页字幕拦截、评论区博主回复抓取。
 """
 
 from __future__ import annotations
@@ -12,7 +12,8 @@ from loguru import logger
 
 from opinion_radar.collectors.base import Connector
 from opinion_radar.collectors.bilibili.browser import BilibiliBrowser
-from opinion_radar.domain.models import ContentItem, Platform
+from opinion_radar.collectors.exceptions import CollectorError
+from opinion_radar.domain.models import ContentItem, ContentType, Platform
 
 
 class BilibiliConnector(Connector):
@@ -30,6 +31,28 @@ class BilibiliConnector(Connector):
         return items
 
     def fetch_detail(self, item: ContentItem) -> ContentItem:
-        # TODO(迭代 001): 播放页拦截 player/wbi/v2 获取字幕地址，无字幕走 whisper 回退
-        # TODO(后续阶段): 评论主楼 + 楼中楼拦截，按 member.mid 过滤博主回复拼入 body_text
-        raise NotImplementedError("B 站详情/字幕/评论拦截将在迭代 001 后续阶段实现")
+        """获取单条动态详情；视频字幕 / 评论拦截在迭代 001 后续阶段实现。"""
+        if item.content_type is not ContentType.MOMENT:
+            raise NotImplementedError(
+                "B 站视频字幕/评论拦截将在迭代 001 后续阶段实现，当前仅支持图文动态"
+            )
+        dynamic_id = str(item.payload.get("dynamic_id") or item.external_id)
+        merged = self.fetch_details([item])
+        detail = merged.get(dynamic_id)
+        if detail is None:
+            raise CollectorError(f"动态详情抓取失败：dynamic_id={dynamic_id}")
+        return detail
+
+    def fetch_details(self, items: list[ContentItem]) -> dict[str, ContentItem]:
+        """批量抓取图文动态详情，返回 dynamic_id → 详情 ContentItem。
+
+        整批共用一个浏览器会话（条间人类节奏停顿），详情字段由调用方合并回原条目。
+        """
+        dynamic_ids = [str(i.payload.get("dynamic_id") or i.external_id) for i in items]
+        logger.info(f"fetch_details_start uid={self.source.uid} count={len(dynamic_ids)}")
+        with BilibiliBrowser(self.browser_config) as browser:
+            results = browser.fetch_dynamic_details(dynamic_ids, uid=self.source.uid)
+        logger.info(
+            f"fetch_details_done uid={self.source.uid} ok={len(results)}/{len(dynamic_ids)}"
+        )
+        return results

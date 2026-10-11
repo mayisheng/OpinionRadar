@@ -1,0 +1,30 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "item": {
+      "id_str": "7890000000000000003",
+      "type": "DYNAMIC_TYPE_DRAW",
+      "modules": {
+        "module_author": { "mid": "90001", "name": "示例财经博主", "pub_ts": 1791640800 },
+        "module_dynamic": {
+          "desc": { "text": "" },
+          "major": {
+            "opus": {
+              "title": "今天路演的几张关键图表",
+              "summary": {
+                "rich_text_nodes": [],
+                "text": "今天路演的几张关键图表，重点看第二张的利差走势。"
+              },
+              "jump_url": "https://www.bilibili.com/opus/7890000000000000003",
+              "pics": [
+                { "url": "http://i0.hdslb.com/bfs/new_dyn/opus_a.jpg" },
+                { "url": "https://i0.hdslb.com/bfs/new_dyn/opus_b.jpg" }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

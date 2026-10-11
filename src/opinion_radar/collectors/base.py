@@ -41,3 +41,11 @@ class Connector(ABC):
     @abstractmethod
     def fetch_detail(self, item: ContentItem) -> ContentItem:
         """获取单条内容详情。付费内容在此处理鉴权，正文留给 Extractor。"""
+
+    def fetch_details(self, items: list[ContentItem]) -> dict[str, ContentItem]:
+        """批量获取详情，返回 external_id → 详情条目。
+
+        默认逐条调用 fetch_detail；平台实现可覆写以复用会话、降低风控暴露
+        （如 B 站浏览器单会话批量拦截）。
+        """
+        return {item.external_id: self.fetch_detail(item) for item in items}

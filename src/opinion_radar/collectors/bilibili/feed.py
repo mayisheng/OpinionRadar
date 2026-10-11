@@ -1,6 +1,7 @@
-"""B 站空间动态流（polymer/web-dynamic/v1/feed/space）纯解析器。
+"""B 站动态流与动态详情响应纯解析器。
 
-只做一件事：把拦截到的接口 JSON 映射成跨平台的 ContentItem。
+只做一件事：把拦截到的接口 JSON（feed/space、detail、opus/detail）
+映射成跨平台的 ContentItem。
 不做任何 IO，浏览器驱动在 browser.py，业务编排不在本模块。
 接口结构变化时，先改这里并用 tests/fixtures/bilibili/ 下的录制响应对拍。
 """
@@ -22,6 +23,8 @@ from opinion_radar.domain.models import ContentItem, ContentType, Platform
 
 # 拦截匹配用的 URL 片段（浏览器侧据此识别动态流响应）
 FEED_API_MARKER = "polymer/web-dynamic/v1/feed/space"
+# 动态详情响应（详情页 t.bilibili.com/{id} 加载；opus/detail 覆盖新版图文）
+DETAIL_API_MARKERS = ("web-dynamic/v1/detail", "web-dynamic/v1/opus")
 
 VIDEO_URL_TEMPLATE = "https://www.bilibili.com/video/{bvid}"
 DYNAMIC_URL_TEMPLATE = "https://t.bilibili.com/{dynamic_id}"
@@ -92,6 +95,26 @@ def parse_feed_page(payload: dict[str, Any], *, source_uid: str) -> FeedPage:
     return FeedPage(has_more=has_more, items=items)
 
 
+def parse_detail_item(payload: dict[str, Any], *, source_uid: str) -> ContentItem:
+    """解析动态详情响应（detail / opus/detail），结构与 feed 的单个 item 相同。
+
+    与 parse_feed_page 复用 raise_for_api_code 和 _parse_item，接口改版时一处维护。
+    """
+    raise_for_api_code(payload)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise CollectorResponseError("动态详情响应缺少 data 对象（接口结构可能已变化）")
+    raw_item = data.get("item")
+    if not isinstance(raw_item, dict):
+        raise CollectorResponseError("动态详情响应缺少 data.item（接口结构可能已变化）")
+    item = _parse_item(raw_item, source_uid=source_uid)
+    if item is None:
+        raise CollectorResponseError(
+            f"动态详情返回了不支持的类型（type={raw_item.get('type')}）"
+        )
+    return item
+
+
 def _parse_item(raw: dict[str, Any], *, source_uid: str) -> ContentItem | None:
     dyn_type = str(raw.get("type") or "")
     dynamic_id = str(raw.get("id_str") or "")
@@ -116,7 +139,7 @@ def _parse_item(raw: dict[str, Any], *, source_uid: str) -> ContentItem | None:
         item = _parse_video(dynamic_id, major, published_at, source_uid)
     elif dyn_type == "DYNAMIC_TYPE_DRAW":
         item = _parse_draw(dynamic_id, text, major, published_at, source_uid)
-    elif dyn_type == "DYNAMIC_TYPE_ARTICLE":
+    elif dyn_type in ("DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS"):
         item = _parse_article(dynamic_id, major, published_at, source_uid)
     elif dyn_type == "DYNAMIC_TYPE_WORD":
         item = _build_moment(dynamic_id, text, [], text, published_at, source_uid, dyn_type)
@@ -177,9 +200,39 @@ def _parse_draw(
         for pic in draw.get("items") or []
         if isinstance(pic, dict) and pic.get("src")
     ]
+    # 新版图文动态的 draw 结构迁移到 opus（pics[].url + summary.text），
+    # feed 预览与详情响应均可能出现，desc.text 为空时正文从 opus 兜底
+    title, opus_text, opus_images = _opus_parts(major)
+    if not images:
+        images = opus_images
     return _build_moment(
-        dynamic_id, text, images, text, published_at, source_uid, "DYNAMIC_TYPE_DRAW"
+        dynamic_id,
+        title or text,
+        images,
+        text or opus_text,
+        published_at,
+        source_uid,
+        "DYNAMIC_TYPE_DRAW",
     )
+
+
+def _opus_parts(major: dict[str, Any]) -> tuple[str, str, list[str]]:
+    """从 major.opus 提取（标题, 正文, 图片列表），兼容新旧字段。
+
+    详情接口的正文在 summary.text，feed 预览在 summary_text，两者取先非空者。
+    """
+    opus = major.get("opus")
+    opus = opus if isinstance(opus, dict) else {}
+    title = str(opus.get("title") or "").strip()
+    summary = opus.get("summary")
+    text = str(summary.get("text") or "").strip() if isinstance(summary, dict) else ""
+    text = text or str(opus.get("summary_text") or "").strip()
+    images = [
+        str(pic.get("url") or "").replace("http://", "https://")
+        for pic in opus.get("pics") or []
+        if isinstance(pic, dict) and pic.get("url")
+    ]
+    return title, text, images
 
 
 def _parse_article(
@@ -188,20 +241,12 @@ def _parse_article(
     published_at: datetime | None,
     source_uid: str,
 ) -> ContentItem:
-    opus = major.get("opus")
-    opus = opus if isinstance(opus, dict) else {}
-    title = str(opus.get("title") or "").strip() or "图文动态"
-    summary = str(opus.get("summary_text") or "").strip()
-    images = [
-        str(pic.get("url") or "").replace("http://", "https://")
-        for pic in opus.get("pics") or []
-        if isinstance(pic, dict) and pic.get("url")
-    ]
+    title, text, images = _opus_parts(major)
     return _build_moment(
         dynamic_id,
-        title,
+        title or text,
         images,
-        summary or title,
+        text or title,
         published_at,
         source_uid,
         "DYNAMIC_TYPE_ARTICLE",
