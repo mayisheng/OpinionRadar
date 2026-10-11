@@ -1,0 +1,1 @@
+# 集成测试目录：使用 respx mock 外部 HTTP，或对本机 Ollama 打标记后真跑。

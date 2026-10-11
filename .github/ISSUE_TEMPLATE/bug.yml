@@ -1,0 +1,30 @@
+name: 缺陷报告
+description: 报告一个运行中出现的问题
+labels: ["type: bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 迭代
+      placeholder: v0.1.0 / 迭代 001
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象与复现步骤
+      placeholder: |
+        1. 执行 `opinion-radar run`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志（脱敏后粘贴）
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      placeholder: macOS 版本、Ollama 版本、模型名称

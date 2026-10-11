@@ -1,0 +1,77 @@
+[project]
+name = "opinion-radar"
+version = "0.1.0"
+description = "定时采集 B 站财经博主内容，经本地大模型识别总结观点，并推送到微信的个人工具"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "mayisheng" }]
+dependencies = [
+    "alembic>=1.13",
+    "httpx>=0.27",
+    "loguru>=0.7",
+    "openai>=1.40",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "pyyaml>=6.0",
+    "sqlalchemy>=2.0",
+    "tenacity>=9.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# 视频音频转写：yt-dlp 取音频，Apple Silicon 用 mlx-whisper 转写（见 docs/runbook/local-setup-mac.md）
+audio = [
+    "mlx-whisper ; sys_platform == 'darwin'",
+    "yt-dlp>=2024.8.6",
+]
+# 图文动态的图片 OCR（迭代 002）
+ocr = ["rapidocr-onnxruntime>=1.3"]
+
+[dependency-groups]
+dev = [
+    "freezegun>=1.5",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+    "pytest>=8.3",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "types-pyyaml>=6.0",
+]
+
+[project.scripts]
+opinion-radar = "opinion_radar.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opinion_radar"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RET", "RUF"]
+# 中文代码库：允许中文标点与全角字符（RUF001 字符串 / RUF002 docstring / RUF003 注释）
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["tenacity.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

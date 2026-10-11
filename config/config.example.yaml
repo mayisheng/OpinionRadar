@@ -1,0 +1,49 @@
+# OpinionRadar 配置示例
+# 用法：cp config/config.example.yaml config/config.yaml，按需修改
+
+# 监控的博主列表（首期 1 个，架构支持多个）
+sources:
+  - uid: "00000000"        # B站博主 UID（主页 URL 中的数字）
+    name: "示例财经博主"
+    enabled: true
+
+# 采集行为（风控相关，见 docs/runbook/operations.md）
+collector:
+  min_interval_seconds: 6.0    # 单次请求最小间隔
+  interval_jitter_seconds: 30  # 随机抖动上限（秒）
+  request_timeout_seconds: 15
+  page_size: 20
+
+# 本地大模型（Ollama，OpenAI 兼容协议）
+llm:
+  base_url: "http://localhost:11434/v1"
+  model: "qwen3:14b"           # 高频任务可换 qwen3:8b
+  timeout_seconds: 180
+  max_retries: 2
+  fallback_enabled: false      # 云端兜底，迭代 005 启用
+
+# 视频转写：官方/AI 字幕优先，缺失时本地 Whisper
+transcription:
+  strategy: "subtitle_first"   # subtitle_first | whisper_only
+  whisper_model: "mlx-community/whisper-large-v3-turbo"
+  max_concurrency: 1
+
+# 图文动态的图片 OCR（迭代 002）
+ocr:
+  enabled: true
+  engine: "rapidocr"
+
+# 推送到手机
+notify:
+  channel: "serverchan"        # serverchan | pushplus | bark | telegram | feishu
+  immediate: true              # 新内容分析完单条推送
+  daily_digest:
+    enabled: true
+    time: "20:00"              # 每日观点汇总推送时间
+
+# 本地存储
+storage:
+  database_url: "sqlite:///./data/opinion_radar.db"
+  raw_dir: "./data/raw"
+
+log_level: "INFO"
