@@ -210,10 +210,14 @@ def archive(
     max_scrolls: int = typer.Option(
         300, "--max-scrolls", help="回溯专用滚动上限（动态多时需要更大值）"
     ),
+    detail: bool = typer.Option(
+        True, "--detail/--no-detail", help="归档后顺带回填图文动态详情（默认开启）"
+    ),
 ) -> None:
     """回溯归档：抓取 year 年 1 月 1 日以来的全部动态，按「UID-名称/时间」写本地 JSON。
 
     只写本地 data/archive/，不上传任何远程；已存在的文件自动跳过，可反复补抓。
+    默认归档后顺带回填缺正文/图片的图文动态详情（同一浏览器会话策略，人类节奏）。
     """
     runtime = _load_or_exit()
     configure_logging(runtime.app.log_level)
@@ -246,9 +250,60 @@ def archive(
         typer.secho(
             f"归档完成：新写入 {len(written)} 条，跳过已存在 {skipped} 条", fg=typer.colors.GREEN
         )
+        if detail:
+            if _backfill_connector_details(connector, limit=None):
+                failed = True
 
     if failed:
         raise typer.Exit(code=1)
+
+
+def _backfill_connector_details(connector, limit: int | None) -> bool:
+    """回填某博主归档中缺正文/图片的图文动态详情，返回是否失败。
+
+    与 backfill-detail 命令共用同一套逻辑；归档顺带调用时 limit=None 全量回填。
+    """
+    uid = connector.source.uid
+    pending = [(path, item) for path, item in load_archive_items(uid) if needs_detail(item)]
+    if not pending:
+        typer.secho("归档中没有缺详情的图文动态", fg=typer.colors.YELLOW)
+        return False
+    if limit is not None:
+        pending = pending[:limit]
+    typer.echo(f"待回填 {len(pending)} 条，将逐条打开动态详情页（人类节奏）…")
+
+    try:
+        details = connector.fetch_details([item for _, item in pending])
+    except LoginRequiredError as exc:
+        typer.secho(f"[FAIL] {exc}，请先执行 opinion-radar bilibili-login", fg=typer.colors.RED)
+        return True
+    except RiskControlBlocked as exc:
+        typer.secho(f"[FAIL] 命中风控已熔断：{exc}", fg=typer.colors.RED)
+        return True
+    except (BrowserRuntimeMissingError, CollectorError) as exc:
+        typer.secho(f"[FAIL] 采集失败：{exc}", fg=typer.colors.RED)
+        return True
+
+    written = 0
+    img_ok = img_failed = 0
+    for path, item in pending:
+        dynamic_id = str(item.payload.get("dynamic_id") or item.external_id)
+        detail = details.get(dynamic_id)
+        if detail is None:
+            typer.secho(f"[WARN] 详情未获取到，跳过：{dynamic_id}", fg=typer.colors.YELLOW)
+            continue
+        merged = merge_detail(item, detail)
+        overwrite_archive_item(path, merged)
+        ok, _, img_fail = download_item_images(merged, archive_dir=path.parent)
+        img_ok += ok
+        img_failed += img_fail
+        written += 1
+    typer.secho(
+        f"回填完成：更新 {written} 条，未获取 {len(pending) - written} 条，"
+        f"图片下载 {img_ok} 张（失败 {img_failed} 张）",
+        fg=typer.colors.GREEN,
+    )
+    return False
 
 
 @app.command("backfill-detail")
@@ -269,48 +324,8 @@ def backfill_detail(
         uid = connector.source.uid
         name = connector.source.name or uid
         typer.echo(f"\n== {name}（uid={uid}）==")
-        pending = [(path, item) for path, item in load_archive_items(uid) if needs_detail(item)]
-        if not pending:
-            typer.secho("归档中没有缺详情的图文动态", fg=typer.colors.YELLOW)
-            continue
-        if limit is not None:
-            pending = pending[:limit]
-        typer.echo(f"待回填 {len(pending)} 条，将逐条打开动态详情页（人类节奏）…")
-
-        try:
-            details = connector.fetch_details([item for _, item in pending])
-        except LoginRequiredError as exc:
-            typer.secho(f"[FAIL] {exc}，请先执行 opinion-radar bilibili-login", fg=typer.colors.RED)
+        if _backfill_connector_details(connector, limit=limit):
             failed = True
-            continue
-        except RiskControlBlocked as exc:
-            typer.secho(f"[FAIL] 命中风控已熔断：{exc}", fg=typer.colors.RED)
-            failed = True
-            continue
-        except (BrowserRuntimeMissingError, CollectorError) as exc:
-            typer.secho(f"[FAIL] 采集失败：{exc}", fg=typer.colors.RED)
-            failed = True
-            continue
-
-        written = 0
-        img_ok = img_failed = 0
-        for path, item in pending:
-            dynamic_id = str(item.payload.get("dynamic_id") or item.external_id)
-            detail = details.get(dynamic_id)
-            if detail is None:
-                typer.secho(f"[WARN] 详情未获取到，跳过：{dynamic_id}", fg=typer.colors.YELLOW)
-                continue
-            merged = merge_detail(item, detail)
-            overwrite_archive_item(path, merged)
-            ok, _, img_fail = download_item_images(merged, archive_dir=path.parent)
-            img_ok += ok
-            img_failed += img_fail
-            written += 1
-        typer.secho(
-            f"回填完成：更新 {written} 条，未获取 {len(pending) - written} 条，"
-            f"图片下载 {img_ok} 张（失败 {img_failed} 张）",
-            fg=typer.colors.GREEN,
-        )
 
     if failed:
         raise typer.Exit(code=1)

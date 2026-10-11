@@ -22,9 +22,17 @@ description: 当用户要求抓取/采集博主或内容源的最新内容（动
 | 命令 | 用途 | 备注 |
 |---|---|---|
 | `uv run opinion-radar discover --hours N` | 探测时间窗内新内容，只打印不落盘 | 怀疑链路问题时先跑这个 |
-| `uv run opinion-radar archive --year YYYY --max-scrolls N` | 回溯归档整年内容到 data/archive/ | 回溯场景放宽滚动上限 |
-| `uv run opinion-radar backfill-detail --limit N` | 补齐归档中缺正文/图片的条目详情 | 逐条打开详情页，人类节奏 |
+| `uv run opinion-radar archive --year YYYY --max-scrolls N` | 回溯归档整年内容到 data/archive/，默认顺带全量回填详情 | 回溯场景放宽滚动上限；`--no-detail` 可只发现不回填 |
+| `uv run opinion-radar backfill-detail --limit N` | 单独补齐归档中缺正文/图片的条目详情 | 逐条打开详情页，人类节奏 |
 | 平台登录命令 | 有头浏览器扫码登录，持久化登录态 | `uv run opinion-radar --help` 查看当前子命令 |
+
+## 回溯分页
+
+- 动态流页面滚动到底后前端不再发请求，但接口仍 `has_more=True`；采集器会在到底后
+  自动切换为 API 分页（页面上下文内 fetch 带 offset 游标，复用浏览器登录态与指纹，
+  不自行签名），直到 `has_more=False` 或触顶 `--max-scrolls` 上限。
+- 因此多年回溯（如 `--year 2024`）无需人工干预，但耗时与滚动上限随内容量增长，
+  动态多的博主需相应调大 `--max-scrolls`。
 
 ## 图片落盘
 

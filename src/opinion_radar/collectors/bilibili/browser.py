@@ -199,7 +199,12 @@ class BilibiliBrowser:
         uid: str,
         since: datetime,
     ) -> list[ContentItem]:
-        """边滚动边解析新拦截到的响应，直到早于 since / 无更多 / 触顶任一上限。"""
+        """边滚动边解析新拦截到的响应，直到早于 since / 无更多 / 触顶任一上限。
+
+        突破分页限制：当页面滚动到底不再产生新响应、但接口仍返回 has_more=True 时，
+        用 page.evaluate 在页面上下文里直接发 fetch 请求（复用浏览器 cookie 与指纹），
+        以最后一条动态的 id_str 作为 offset 继续翻页，直到 has_more=False 或时间窗外。
+        """
         cursor = 0
         seen_dynamic_ids: set[str] = set()
         seen_external_ids: set[str] = set()
@@ -208,6 +213,9 @@ class BilibiliBrowser:
         idle_rounds = 0
         scrolls = 0
         last_feed: FeedPage | None = None
+        # 手动翻页状态：page_scroll 阶段结束后若 has_more 仍 True，则切到 api_scroll
+        api_offset: str | None = None
+        api_scroll_count = 0
 
         while True:
             # 解析自上次以来新拦截到的所有响应（解析即做业务码检查，风控在此抛出）
@@ -255,13 +263,143 @@ class BilibiliBrowser:
             )
             if self._wait_captures(page, captured, baseline, timeout_seconds=4.0):
                 idle_rounds = 0
-            else:
+            elif self._at_page_bottom(page):
+                # 已到底仍无新响应：连续多轮即判定页面滚动不再加载，尝试 API 翻页
                 idle_rounds += 1
                 if idle_rounds >= _IDLE_STOP_THRESHOLD:
-                    logger.info("feed stop: no new responses after scrolling")
+                    if api_offset is None and last_feed is not None and last_feed.has_more:
+                        # 从最后一条响应提取 offset，进入 API 翻页阶段
+                        api_offset = self._extract_offset(last_feed)
+                        if api_offset:
+                            logger.info(
+                                f"feed switch to api pagination: offset={api_offset}"
+                            )
+                            # 重置 idle 计数，给 API 翻页更多机会
+                            idle_rounds = 0
+                            # 用 API 翻页继续，不再依赖页面滚动
+                            new_payloads = self._fetch_feed_by_offset(
+                                page, uid, api_offset, since
+                            )
+                            for payload in new_payloads:
+                                captured.append(payload)
+                            continue
+                    logger.info("feed stop: no new responses after reaching bottom")
+                    break
+            else:
+                # 还没滚到底，只是本轮未触发新请求，不能算 idle
+                idle_rounds = 0
+
+            # API 翻页阶段：持续用 offset 拉取直到 has_more=False 或时间窗外
+            if api_offset is not None:
+                # 解析完当前 captured 后，若还有 has_more 且未超时，继续 API 翻页
+                if last_feed is not None and last_feed.has_more:
+                    next_offset = self._extract_offset(last_feed)
+                    if next_offset and next_offset != api_offset:
+                        api_offset = next_offset
+                        api_scroll_count += 1
+                        if api_scroll_count >= self.config.max_feed_responses:
+                            logger.warning(
+                                f"api pagination stop: max_api_scrolls={self.config.max_feed_responses}"
+                            )
+                            break
+                        self._human_pause(
+                            page,
+                            self.config.action_delay_min_seconds,
+                            self.config.action_delay_max_seconds,
+                        )
+                        new_payloads = self._fetch_feed_by_offset(
+                            page, uid, api_offset, since
+                        )
+                        if not new_payloads:
+                            logger.info("api pagination stop: empty response")
+                            break
+                        for payload in new_payloads:
+                            captured.append(payload)
+                        continue
+                    else:
+                        logger.info("api pagination stop: no next offset")
+                        break
+                else:
+                    logger.info("api pagination stop: has_more=false")
                     break
 
         return collected
+
+    @staticmethod
+    def _at_page_bottom(page: Any) -> bool:
+        """页面是否已滚动到底部附近（剩余不足半个视口）；评估失败按已到底处理。"""
+        try:
+            return bool(
+                page.evaluate(
+                    "window.innerHeight + window.scrollY"
+                    " >= document.documentElement.scrollHeight - window.innerHeight * 0.5"
+                )
+            )
+        except Exception:
+            return True
+
+    @staticmethod
+    def _extract_offset(feed: FeedPage) -> str | None:
+        """从 FeedPage 提取下页 offset：取最后一条动态的 id_str（B 站分页游标）。"""
+        if not feed.items:
+            return None
+        last = feed.items[-1]
+        return str(last.payload.get("dynamic_id") or last.external_id)
+
+    def _fetch_feed_by_offset(
+        self, page: Any, uid: str, offset: str, since: datetime
+    ) -> list[dict[str, Any]]:
+        """在页面上下文里用 fetch 直接调用 feed/space 接口，复用浏览器 cookie 与指纹。
+
+        只读操作，不自行签名、不修改任何状态；风控基线由浏览器会话保持。
+        返回新拦截到的响应列表（可能为空，表示已到时间窗外或接口无更多）。
+        """
+        # 构造与页面滚动完全一致的请求 URL（features 等参数从已拦截请求复制）
+        # 这里用模板拼接，实际参数由 B 站前端固定，与页面滚动时一致
+        url = (
+            f"https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+            f"?offset={offset}&host_mid={uid}&timezone_offset=-480&platform=web"
+            f"&features=itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,"
+            f"forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,"
+            f"ugcDelete,onlyfansQaCard,avatarAutoTheme,sunflowerStyle,cardsEnhance,"
+            f"eva3CardOpus,eva3CardVideo,eva3CardComment,eva3CardUser"
+            f"&web_location=333.1387"
+        )
+        logger.debug(f"api pagination fetch: offset={offset}")
+
+        # 在页面上下文执行 fetch，浏览器自动带 cookie / 指纹 / wbi 签名
+        result = page.evaluate(
+            """async (url) => {
+                try {
+                    const resp = await fetch(url, {
+                        method: 'GET',
+                        credentials: 'include',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    return await resp.json();
+                } catch (e) {
+                    return { code: -1, message: String(e) };
+                }
+            }""",
+            url,
+        )
+        if not isinstance(result, dict):
+            logger.warning(f"api pagination unexpected result type: {type(result)}")
+            return []
+
+        code = result.get("code")
+        if code != 0:
+            message = result.get("message") or result.get("msg") or "unknown"
+            logger.warning(f"api pagination error code={code} message={message}")
+            return []
+
+        data = result.get("data")
+        if not isinstance(data, dict):
+            return []
+
+        # 把 API 结果包装成与页面拦截一致的格式，供 parse_feed_page 解析
+        # 注意：这里只返回当前页数据，调用方负责追加到 captured 列表
+        return [result]
 
     def fetch_dynamic_details(self, dynamic_ids: list[str], *, uid: str) -> dict[str, ContentItem]:
         """批量打开动态详情页，拦截 detail 响应，返回 dynamic_id → ContentItem。
