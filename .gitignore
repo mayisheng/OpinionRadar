@@ -21,3 +21,8 @@ data/
 
 # 系统
 .DS_Store
+
+# TRAE / Agent 协作资产（均需随仓库共享，勿忽略）：
+# - AGENTS.md：项目规则
+# - .agents/skills/：项目自建技能的权威副本（Agent Skills 规范目录）
+# - .trae/skills/ 下的同名条目为指向 ../../.agents/skills/ 的符号链接，勿在其中放唯一实体
