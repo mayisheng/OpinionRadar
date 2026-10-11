@@ -109,9 +109,7 @@ def parse_detail_item(payload: dict[str, Any], *, source_uid: str) -> ContentIte
         raise CollectorResponseError("动态详情响应缺少 data.item（接口结构可能已变化）")
     item = _parse_item(raw_item, source_uid=source_uid)
     if item is None:
-        raise CollectorResponseError(
-            f"动态详情返回了不支持的类型（type={raw_item.get('type')}）"
-        )
+        raise CollectorResponseError(f"动态详情返回了不支持的类型（type={raw_item.get('type')}）")
     return item
 
 

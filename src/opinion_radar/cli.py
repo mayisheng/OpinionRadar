@@ -36,6 +36,7 @@ from opinion_radar.config import (
 from opinion_radar.pipeline import Pipeline
 from opinion_radar.storage.archive import (
     archive_items,
+    download_item_images,
     load_archive_items,
     merge_detail,
     needs_detail,
@@ -292,16 +293,22 @@ def backfill_detail(
             continue
 
         written = 0
+        img_ok = img_failed = 0
         for path, item in pending:
             dynamic_id = str(item.payload.get("dynamic_id") or item.external_id)
             detail = details.get(dynamic_id)
             if detail is None:
                 typer.secho(f"[WARN] 详情未获取到，跳过：{dynamic_id}", fg=typer.colors.YELLOW)
                 continue
-            overwrite_archive_item(path, merge_detail(item, detail))
+            merged = merge_detail(item, detail)
+            overwrite_archive_item(path, merged)
+            ok, _, img_fail = download_item_images(merged, archive_dir=path.parent)
+            img_ok += ok
+            img_failed += img_fail
             written += 1
         typer.secho(
-            f"回填完成：更新 {written} 条，未获取 {len(pending) - written} 条",
+            f"回填完成：更新 {written} 条，未获取 {len(pending) - written} 条，"
+            f"图片下载 {img_ok} 张（失败 {img_failed} 张）",
             fg=typer.colors.GREEN,
         )
 

@@ -26,20 +26,43 @@ description: 当用户要求抓取/采集博主或内容源的最新内容（动
 | `uv run opinion-radar backfill-detail --limit N` | 补齐归档中缺正文/图片的条目详情 | 逐条打开详情页，人类节奏 |
 | 平台登录命令 | 有头浏览器扫码登录，持久化登录态 | `uv run opinion-radar --help` 查看当前子命令 |
 
+## 图片落盘
+
+- 归档与详情回填时，条目 `payload.image_urls` 指向的图片会自动下载到
+  `data/archive/{uid}-{名称}/images/`，文件名取 URL 路径最后一段（hash+扩展名）；
+  JSON 与图片是确定性映射：URL basename ↔ images/ 文件名，列表顺序即图片顺序。
+- 图片 CDN 属静态资源域，httpx 直连下载，不经浏览器、不消耗主站风控基线。
+- 下载幂等：已存在文件跳过；单张失败只告警不中断，可重跑补齐：
+
+```bash
+uv run python -c "
+from opinion_radar.storage.archive import load_archive_items, download_item_images
+uid = 'UID'
+total = [0, 0, 0]
+for path, item in load_archive_items(uid):
+    r = download_item_images(item, archive_dir=path.parent)
+    total = [a + b for a, b in zip(total, r)]
+print('下载/跳过/失败:', total)
+"
+```
+
 ## 执行顺序
 
 1. **冷却检查**：`data/` 下存在未过期的风控冷却标记文件（文件名见采集器浏览器模块常量）时，直接停止并告知用户解除时间，不得启动浏览器。
 2. **登录态**：profile 未登录会抛 `LoginRequiredError`，引导用户执行平台登录命令（需要人工扫码）。
 3. **增量优先**：日常采集用默认 headless；回填批量较大时加 `--limit`（建议每轮 ≤10 条），必要时 `--headed` 便于人工观察验证码。
-4. **验证产出**：采集完成后统计归档结果并向用户汇报，例如：
+4. **验证产出**：采集完成后统计归档结果（含本地图片文件数）并向用户汇报，例如：
 
 ```bash
 python3 -c "
 import json, glob
+from pathlib import Path
 for f in sorted(glob.glob('data/archive/*/*.json')):
     d = json.load(open(f))
     p = d.get('payload') or {}
-    print(f[:15], d['status'], len(d.get('body_text') or ''), '字', len(p.get('image_urls') or []), '图')
+    img_dir = Path(f).parent / 'images'
+    n_files = sum(1 for u in p.get('image_urls') or [] if (img_dir / u.rsplit('/', 1)[-1]).exists())
+    print(f[:15], d['status'], len(d.get('body_text') or ''), '字', n_files, '/', len(p.get('image_urls') or []), '图已落盘')
 "
 ```
 
@@ -47,7 +70,7 @@ for f in sorted(glob.glob('data/archive/*/*.json')):
 
 ## 硬约束（违反即停）
 
-- 抓取内容只写 `data/archive/`（已 gitignore），不得提交、不得上传远程、不得粘贴到 Issue/PR。
+- 抓取内容（含正文 JSON 与 images/ 下图片文件）只写 `data/archive/`（已 gitignore），不得提交、不得上传远程、不得粘贴到 Issue/PR。
 - 未付费内容直接标记「付费不可达」，不得尝试绕过付费墙；不录制、不保存任何视频/音频文件，仅提取文字用于观点分析。
 - 风控节奏参数（动作间隔、滚动上限、冷却时长）是安全基线，禁止为提速调小。
 - 归档幂等：已存在文件自动跳过，可安全重跑；详情回填覆写前先合并（非空字段不覆盖）。

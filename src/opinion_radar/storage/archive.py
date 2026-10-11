@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
+import httpx
 from loguru import logger
 
 from opinion_radar.domain.models import ContentItem, ContentType, ProcessingStatus
+from opinion_radar.utils.http import create_client
 
 DEFAULT_ARCHIVE_DIR = Path("./data/archive")
 
@@ -20,6 +23,57 @@ _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\s]+')
 
 # 无标题动态的兜底标题，详情抓取后若拿到真标题则替换
 _GENERIC_TITLE = "图文动态"
+
+# 图片落盘子目录：data/archive/{uid}-{名称}/images/{URL 文件名}
+_IMAGES_DIRNAME = "images"
+
+
+def _image_filename(url: str) -> str | None:
+    """取图片 URL 路径最后一段作为本地文件名（B 站 bfs URL 为唯一 hash + 扩展名）。"""
+    name = urlsplit(url).path.rsplit("/", 1)[-1]
+    return name or None
+
+
+def download_item_images(item: ContentItem, *, archive_dir: Path) -> tuple[int, int, int]:
+    """把条目 payload 中 image_urls 指向的图片下载到归档目录 images/ 子目录。
+
+    图片 CDN 属静态资源域，直接 httpx 下载，不经浏览器、不消耗主站风控基线；
+    内容只落本地（data/archive/ 已 gitignore），不上传远程。
+    文件已存在则跳过（幂等）；先写 .part 临时文件再原子改名，
+    避免网络中断留下半截文件被幂等逻辑误判为已下载。
+    返回（成功, 跳过, 失败）；单张失败只告警，不中断其余下载。
+    """
+    urls = [u for u in item.payload.get("image_urls") or [] if isinstance(u, str)]
+    if not urls:
+        return 0, 0, 0
+    images_dir = archive_dir / _IMAGES_DIRNAME
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    ok = skipped = failed = 0
+    with create_client(headers={"Referer": "https://www.bilibili.com/"}) as client:
+        for url in urls:
+            name = _image_filename(url)
+            if name is None:
+                failed += 1
+                logger.warning(f"image_download_failed url={url} reason=no filename in url")
+                continue
+            final = images_dir / name
+            if final.exists():
+                skipped += 1
+                continue
+            tmp = images_dir / f"{name}.part"
+            try:
+                resp = client.get(url)
+                resp.raise_for_status()
+                tmp.write_bytes(resp.content)
+                tmp.replace(final)
+                ok += 1
+            except (httpx.HTTPError, OSError) as exc:
+                failed += 1
+                tmp.unlink(missing_ok=True)
+                logger.warning(f"image_download_failed url={url} error={exc}")
+    logger.info(f"item_images_done id={item.external_id} ok={ok} skipped={skipped} failed={failed}")
+    return ok, skipped, failed
 
 
 def _safe_dir_name(uid: str, author_name: str | None) -> str:
@@ -37,7 +91,7 @@ def archive_items(
     """把内容逐条写成 JSON 文件，返回（新写入的路径列表, 跳过的已存在条数）。
 
     目录结构：data/archive/{uid}-{名称}/{YYYYMMDD-HHMMSS}_{类型}_{external_id}.json
-    已存在的文件直接跳过（幂等，可反复补抓）。
+    已存在的文件直接跳过（幂等，可反复补抓）；条目带 image_urls 时图片落盘到 images/。
     """
     author = author_name or next(
         (str(i.payload["author_name"]) for i in items if i.payload.get("author_name")),
@@ -64,6 +118,7 @@ def archive_items(
             encoding="utf-8",
         )
         written.append(path)
+        download_item_images(item, archive_dir=target_dir)
 
     logger.info(f"archive_done dir={target_dir} new={len(written)} skipped={skipped}")
     return written, skipped

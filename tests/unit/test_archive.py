@@ -1,4 +1,4 @@
-"""本地归档存储单测：详情回填的读取、合并、覆写行为。"""
+"""本地归档存储单测：详情回填的读取、合并、覆写行为与图片落盘。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,12 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
+
 from opinion_radar.domain.models import ContentItem, ContentType, Platform, ProcessingStatus
+from opinion_radar.storage import archive as archive_module
 from opinion_radar.storage.archive import (
+    download_item_images,
     load_archive_items,
     merge_detail,
     needs_detail,
@@ -114,3 +118,72 @@ def test_load_archive_items_skips_broken_file(tmp_path: Path) -> None:
     target.mkdir()
     (target / "broken.json").write_text("{not json", encoding="utf-8")
     assert load_archive_items(UID, base_dir=tmp_path) == []
+
+
+def _mock_client(monkeypatch, handler) -> list[str]:
+    """用 httpx.MockTransport 替换归档模块的 create_client，记录请求过的 URL。"""
+    requested: list[str] = []
+
+    def tracking_handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return handler(request)
+
+    # transport 可跨 client 复用；client 每次新建（源码里是 with 上下文，退出即 close）
+    transport = httpx.MockTransport(tracking_handler)
+    monkeypatch.setattr(
+        archive_module, "create_client", lambda **_: httpx.Client(transport=transport)
+    )
+    return requested
+
+
+def test_download_item_images_writes_files_and_is_idempotent(tmp_path: Path, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, content=b"img-" + name.encode())
+
+    requested = _mock_client(monkeypatch, handler)
+    item = _moment("1", images=["https://i0.hdslb.com/bfs/a.png", "https://i0.hdslb.com/bfs/b.jpg"])
+
+    ok, skipped, failed = download_item_images(item, archive_dir=tmp_path)
+    assert (ok, skipped, failed) == (2, 0, 0)
+    assert (tmp_path / "images" / "a.png").read_bytes() == b"img-a.png"
+    assert (tmp_path / "images" / "b.jpg").read_bytes() == b"img-b.jpg"
+    assert len(requested) == 2
+
+    # 重跑幂等：已存在文件不再发请求
+    ok2, skipped2, failed2 = download_item_images(item, archive_dir=tmp_path)
+    assert (ok2, skipped2, failed2) == (0, 2, 0)
+    assert len(requested) == 2
+
+
+def test_download_item_images_continues_on_single_failure(tmp_path: Path, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "bad" in str(request.url):
+            return httpx.Response(404)
+        return httpx.Response(200, content=b"x")
+
+    _mock_client(monkeypatch, handler)
+    item = _moment("1", images=["https://x/bad.png", "https://x/good.png"])
+
+    ok, skipped, failed = download_item_images(item, archive_dir=tmp_path)
+    assert (ok, skipped, failed) == (1, 0, 1)
+    assert (tmp_path / "images" / "good.png").exists()
+    # 失败与临时文件均不留残留
+    assert not (tmp_path / "images" / "bad.png").exists()
+    assert list(tmp_path.glob("images/*.part")) == []
+
+
+def test_download_item_images_skips_when_no_urls(tmp_path: Path) -> None:
+    ok, skipped, failed = download_item_images(_moment("1"), archive_dir=tmp_path)
+    assert (ok, skipped, failed) == (0, 0, 0)
+    assert not (tmp_path / "images").exists()
+
+
+def test_archive_items_downloads_images_on_write(tmp_path: Path, monkeypatch) -> None:
+    _mock_client(monkeypatch, lambda request: httpx.Response(200, content=b"img"))
+    item = _moment("1", body="正文", images=["https://x/pic.png"])
+
+    written, skipped = archive_module.archive_items([item], uid=UID, base_dir=tmp_path)
+
+    assert len(written) == 1 and skipped == 0
+    assert (written[0].parent / "images" / "pic.png").read_bytes() == b"img"
