@@ -22,7 +22,11 @@ data/
 # 系统
 .DS_Store
 
-# TRAE / Agent 协作资产（均需随仓库共享，勿忽略）：
+# TRAE 本地工作目录（规划文档、技能本地软链等），仅存本机，不入库
+.trae/
+
+# Agent 协作资产（需随仓库共享，勿忽略）：
 # - AGENTS.md：项目规则
 # - .agents/skills/：项目自建技能的权威副本（Agent Skills 规范目录）
-# - .trae/skills/ 下的同名条目为指向 ../../.agents/skills/ 的符号链接，勿在其中放唯一实体
+#   本地使用时在 .trae/skills/<name> 建指向 ../../.agents/skills/<name> 的软链接，
+#   或在 TRAE 设置中启用 .agents 技能目录；该软链不入库

@@ -25,6 +25,9 @@
   决策被推翻时新增一篇 ADR，并把旧文状态标为 `Superseded by ADR-NNNN`。
 - 迭代规划类文档不是 ADR，按迭代 SOP 存入 `docs/product/iterations/NNN-名称.md`。
 - 归档完成后告知用户 ADR 路径与编号；**不要自动 git commit**，除非用户明确要求。
+- 项目技能实体位于 `.agents/skills/`（随仓库提交）；`.trae/` 整个目录不入库，
+  本地通过 `.trae/skills/<name>` 软链（指向 `../../.agents/skills/<name>`）或
+  TRAE「启用 .agents 技能目录」设置来发现技能。
 
 ## 合规红线
 
