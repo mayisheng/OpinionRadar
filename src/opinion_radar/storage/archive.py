@@ -173,6 +173,40 @@ def merge_detail(existing: ContentItem, detail: ContentItem) -> ContentItem:
     return merged
 
 
+# 视频字幕的终态标记：这些状态下不再回填（无字幕轨道 / 未付费的充电专属，红线禁止重试）
+_VIDEO_SUBTITLE_TERMINAL = ("missing", "paid_unreachable")
+
+
+def needs_video_detail(item: ContentItem) -> bool:
+    """视频是否缺字幕正文：无正文且字幕状态非终态（missing / paid_unreachable）。"""
+    if item.content_type is not ContentType.VIDEO:
+        return False
+    if (item.body_text or "").strip():
+        return False
+    return item.payload.get("subtitle_status") not in _VIDEO_SUBTITLE_TERMINAL
+
+
+def merge_video_detail(existing: ContentItem, detail: ContentItem) -> ContentItem:
+    """把字幕详情条目的正文 / 付费标记 / 字幕状态合并进已有视频条目。
+
+    已有正文字段不覆盖；字幕状态以详情为准（含「付费不可达」等终态标记）。
+    """
+    merged = existing.model_copy(deep=True)
+    if not (merged.body_text or "").strip() and (detail.body_text or "").strip():
+        merged.body_text = detail.body_text
+    if detail.is_paid:
+        merged.is_paid = True
+    merged_payload = dict(merged.payload)
+    for key in ("subtitle_status", "subtitle_lan"):
+        value = detail.payload.get(key)
+        if value:
+            merged_payload[key] = value
+    merged.payload = merged_payload
+    if (merged.body_text or "").strip() and merged.status is ProcessingStatus.DISCOVERED:
+        merged.status = ProcessingStatus.FETCHED
+    return merged
+
+
 def overwrite_archive_item(path: Path, item: ContentItem) -> None:
     """用更新后的条目覆写归档文件（仅回填详情场景使用，普通归档仍幂等跳过）。"""
     path.write_text(

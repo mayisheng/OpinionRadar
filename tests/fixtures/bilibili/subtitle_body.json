@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "type": 1,
+  "lang": "ai-zh",
+  "font_size": 0.4,
+  "font_color": "#FFFFFF",
+  "background_color": "#0C0C0C",
+  "background_alpha": 0,
+  "Stroke": "#0C0C0C",
+  "body": [
+    {"from": 0.14, "to": 0.66, "sid": 1, "location": 2, "music": 0.0, "content": "大家好"},
+    {"from": 0.7, "to": 2.1, "sid": 2, "location": 2, "music": 0.0, "content": "今天聊一聊利率环境"},
+    {"from": 2.2, "to": 4.0, "sid": 3, "location": 2, "music": 0.0, "content": "以及红利资产的估值修复"},
+    {"from": 4.1, "to": 4.3, "sid": 4, "location": 2, "music": 0.5, "content": ""}
+  ]
+}

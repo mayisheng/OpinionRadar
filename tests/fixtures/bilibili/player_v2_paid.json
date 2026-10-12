@@ -1,0 +1,16 @@
+{
+  "code": 0,
+  "data": {
+    "bvid": "BV00TESTPAID001",
+    "aid": 44444444444,
+    "cid": 555555,
+    "is_upower_exclusive": true,
+    "is_upower_play": false,
+    "need_login_subtitle": false,
+    "subtitle": {
+      "allow_submit": false,
+      "lan": "",
+      "subtitles": []
+    }
+  }
+}

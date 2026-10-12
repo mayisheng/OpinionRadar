@@ -56,8 +56,11 @@ class FeedPage(BaseModel):
     items: list[ContentItem]
 
 
-def raise_for_api_code(payload: dict[str, Any]) -> None:
-    """检查动态流响应的业务码，异常状态直接抛出（由浏览器层熔断处理）。"""
+def raise_for_api_code(payload: dict[str, Any], *, api: str = "动态流") -> None:
+    """检查接口响应的业务码，异常状态直接抛出（由浏览器层熔断处理）。
+
+    api 参数用于错误信息标注来源（动态流 / 动态详情 / 播放页接口），便于排障。
+    """
     code = payload.get("code")
     if code == _CODE_OK:
         return
@@ -69,7 +72,7 @@ def raise_for_api_code(payload: dict[str, Any]) -> None:
             f"B 站风控拦截（code={code}，message={message}）：本轮熔断，不重试"
         )
     raise CollectorResponseError(
-        f"动态流返回异常业务码（code={code}，message={message}）", code=code
+        f"{api}返回异常业务码（code={code}，message={message}）", code=code
     )
 
 
@@ -100,7 +103,7 @@ def parse_detail_item(payload: dict[str, Any], *, source_uid: str) -> ContentIte
 
     与 parse_feed_page 复用 raise_for_api_code 和 _parse_item，接口改版时一处维护。
     """
-    raise_for_api_code(payload)
+    raise_for_api_code(payload, api="动态详情")
     data = payload.get("data")
     if not isinstance(data, dict):
         raise CollectorResponseError("动态详情响应缺少 data 对象（接口结构可能已变化）")

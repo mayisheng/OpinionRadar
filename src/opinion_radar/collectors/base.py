@@ -49,3 +49,10 @@ class Connector(ABC):
         （如 B 站浏览器单会话批量拦截）。
         """
         return {item.external_id: self.fetch_detail(item) for item in items}
+
+    def fetch_video_details(self, items: list[ContentItem]) -> dict[str, ContentItem]:
+        """批量获取视频详情（字幕转写等），返回 external_id → 详情条目。
+
+        仅支持视频内容的平台实现需要覆写；默认视为不支持。
+        """
+        raise NotImplementedError("当前平台不支持视频详情抓取")

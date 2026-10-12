@@ -21,9 +21,15 @@ from opinion_radar.collectors.bilibili.feed import (
     DETAIL_API_MARKERS,
     DYNAMIC_URL_TEMPLATE,
     FEED_API_MARKER,
+    VIDEO_URL_TEMPLATE,
     FeedPage,
     parse_detail_item,
     parse_feed_page,
+)
+from opinion_radar.collectors.bilibili.subtitle import (
+    PLAYER_API_MARKERS,
+    PlayerInfo,
+    parse_player_info,
 )
 from opinion_radar.collectors.exceptions import (
     BrowserRuntimeMissingError,
@@ -89,6 +95,9 @@ class BilibiliBrowser:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-default-browser-check",
+                    # 目标站点在国内，绕过系统代理：本机代理进程不在时
+                    # Chromium 会因 ERR_PROXY_CONNECTION_FAILED 全部导航失败
+                    "--no-proxy-server",
                 ],
             )
         except PlaywrightError as exc:
@@ -271,15 +280,11 @@ class BilibiliBrowser:
                         # 从最后一条响应提取 offset，进入 API 翻页阶段
                         api_offset = self._extract_offset(last_feed)
                         if api_offset:
-                            logger.info(
-                                f"feed switch to api pagination: offset={api_offset}"
-                            )
+                            logger.info(f"feed switch to api pagination: offset={api_offset}")
                             # 重置 idle 计数，给 API 翻页更多机会
                             idle_rounds = 0
                             # 用 API 翻页继续，不再依赖页面滚动
-                            new_payloads = self._fetch_feed_by_offset(
-                                page, uid, api_offset, since
-                            )
+                            new_payloads = self._fetch_feed_by_offset(page, uid, api_offset, since)
                             for payload in new_payloads:
                                 captured.append(payload)
                             continue
@@ -299,7 +304,8 @@ class BilibiliBrowser:
                         api_scroll_count += 1
                         if api_scroll_count >= self.config.max_feed_responses:
                             logger.warning(
-                                f"api pagination stop: max_api_scrolls={self.config.max_feed_responses}"
+                                "api pagination stop: "
+                                f"max_api_scrolls={self.config.max_feed_responses}"
                             )
                             break
                         self._human_pause(
@@ -307,21 +313,17 @@ class BilibiliBrowser:
                             self.config.action_delay_min_seconds,
                             self.config.action_delay_max_seconds,
                         )
-                        new_payloads = self._fetch_feed_by_offset(
-                            page, uid, api_offset, since
-                        )
+                        new_payloads = self._fetch_feed_by_offset(page, uid, api_offset, since)
                         if not new_payloads:
                             logger.info("api pagination stop: empty response")
                             break
                         for payload in new_payloads:
                             captured.append(payload)
                         continue
-                    else:
-                        logger.info("api pagination stop: no next offset")
-                        break
-                else:
-                    logger.info("api pagination stop: has_more=false")
+                    logger.info("api pagination stop: no next offset")
                     break
+                logger.info("api pagination stop: has_more=false")
+                break
 
         return collected
 
@@ -485,6 +487,92 @@ class BilibiliBrowser:
                 logger.info(f"dynamic_detail_ok id={dynamic_id} type={dyn_type}")
                 return item
         logger.warning(f"dynamic_detail_missing id={dynamic_id} captures={len(captured)}")
+        return None
+
+    def fetch_video_players(self, bvids: list[str]) -> dict[str, PlayerInfo]:
+        """逐条打开视频播放页，拦截 player 接口响应，返回 bvid → PlayerInfo。
+
+        单个浏览器会话内逐条访问（条间人类节奏停顿），单条失败只记日志不中断整批；
+        命中风控 / 登录失效仍然熔断抛出。字幕正文下载不在此处（CDN 直连，见 subtitle.py）。
+        """
+        self._enforce_cooldown()
+        if not self.is_logged_in():
+            raise LoginRequiredError("浏览器 profile 未登录：请先执行 opinion-radar bilibili-login")
+
+        context = self._require_context()
+        results: dict[str, PlayerInfo] = {}
+        timeout = self.config.detail_response_timeout_seconds
+
+        for index, bvid in enumerate(bvids):
+            page = context.new_page()
+            try:
+                if index > 0:
+                    self._human_pause(
+                        page,
+                        self.config.action_delay_min_seconds,
+                        self.config.action_delay_max_seconds,
+                    )
+                info = self._fetch_one_player(page, bvid, timeout=timeout)
+            finally:
+                page.close()
+            if info is not None:
+                results[bvid] = info
+
+        logger.info(f"video_players_done total={len(bvids)} ok={len(results)}")
+        return results
+
+    def _fetch_one_player(self, page: Any, bvid: str, *, timeout: float) -> PlayerInfo | None:
+        """在给定页面上打开单个视频播放页，拦截 player 响应；失败返回 None。"""
+        captured: list[dict[str, Any]] = []
+
+        def _on_response(response: Any) -> None:
+            if not any(marker in response.url for marker in PLAYER_API_MARKERS):
+                return
+            try:
+                payload = response.json()
+            except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
+                logger.debug(f"player response unreadable: {exc}")
+                return
+            captured.append(payload)
+
+        page.on("response", _on_response)
+        url = VIDEO_URL_TEMPLATE.format(bvid=bvid)
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+        try:
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+            except PlaywrightTimeoutError as exc:
+                raise CollectorTimeout(f"打开视频播放页超时：{url}") from exc
+            except PlaywrightError as exc:
+                raise CollectorError(f"浏览器打开视频播放页失败：{exc}") from exc
+            self._wait_captures(page, captured, 0, timeout)
+            self._raise_if_blocked(page)
+        except RiskControlBlocked:
+            self._write_cooldown()
+            raise
+        except CollectorError as exc:
+            logger.warning(f"video_player_failed bvid={bvid} error={exc}")
+            return None
+
+        # 同一页面可能发出多个 player 相关响应（v2 / 在线人数等），解析后按 bvid 匹配
+        for payload in captured:
+            try:
+                info = parse_player_info(payload)
+            except (RiskControlBlocked, LoginRequiredError):
+                self._write_cooldown()
+                raise
+            except CollectorError as exc:
+                logger.debug(f"player parse skipped bvid={bvid} error={exc}")
+                continue
+            if info.bvid == bvid:
+                logger.info(
+                    f"video_player_ok bvid={bvid} paid={info.is_paid} "
+                    f"playable={info.paid_playable} lan={info.subtitle_lan}"
+                )
+                return info
+        logger.warning(f"video_player_missing bvid={bvid} captures={len(captured)}")
         return None
 
     def _raise_if_blocked(self, page: Any) -> None:

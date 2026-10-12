@@ -1,14 +1,15 @@
 """OpinionRadar 命令行入口。
 
 命令：
-    opinion-radar doctor          环境自检（配置 / Ollama 连通性）
-    opinion-radar bilibili-login  有头浏览器扫码登录，持久化登录态（ADR-0005）
-    opinion-radar discover        探测：真实拉取空间动态流并打印，不写库不推送
-    opinion-radar archive         回溯归档：抓取指定年份以来全部动态，写入本地 JSON
-    opinion-radar backfill-detail 回填归档中缺正文/图片的图文动态详情
-    opinion-radar run --dry-run   演练模式：只打印管线计划
-    opinion-radar run             执行一次采集 → 提取 → 分析 → 推送（迭代 001）
-    opinion-radar digest          生成并推送每日观点汇总（迭代 004）
+    opinion-radar doctor            环境自检（配置 / Ollama 连通性）
+    opinion-radar bilibili-login    有头浏览器扫码登录，持久化登录态（ADR-0005）
+    opinion-radar discover          探测：真实拉取空间动态流并打印，不写库不推送
+    opinion-radar archive           回溯归档：抓取指定年份以来全部动态，写入本地 JSON
+    opinion-radar backfill-detail   回填归档中缺正文/图片的图文动态详情
+    opinion-radar backfill-subtitle 回填归档中缺字幕正文的视频（播放页拦截）
+    opinion-radar run --dry-run     演练模式：只打印管线计划
+    opinion-radar run               执行一次采集 → 提取 → 分析 → 推送（迭代 001）
+    opinion-radar digest            生成并推送每日观点汇总（迭代 004）
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import typer
 
 from opinion_radar import __version__
 from opinion_radar.collectors import build_connectors
+from opinion_radar.collectors.base import Connector
 from opinion_radar.collectors.bilibili.browser import BilibiliBrowser
 from opinion_radar.collectors.exceptions import (
     BrowserRuntimeMissingError,
@@ -39,12 +41,17 @@ from opinion_radar.storage.archive import (
     download_item_images,
     load_archive_items,
     merge_detail,
+    merge_video_detail,
     needs_detail,
+    needs_video_detail,
     overwrite_archive_item,
 )
 from opinion_radar.utils.logging import configure_logging
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="B 站财经观点雷达")
+
+# 视频字幕回填的批大小：每批一个新浏览器会话，规避长会话 CDP 挂起（见 _backfill_connector_videos）
+_VIDEO_BATCH_SIZE = 5
 
 
 def _version_callback(value: bool) -> None:
@@ -253,12 +260,14 @@ def archive(
         if detail:
             if _backfill_connector_details(connector, limit=None):
                 failed = True
+            if _backfill_connector_videos(connector, limit=None):
+                failed = True
 
     if failed:
         raise typer.Exit(code=1)
 
 
-def _backfill_connector_details(connector, limit: int | None) -> bool:
+def _backfill_connector_details(connector: Connector, limit: int | None) -> bool:
     """回填某博主归档中缺正文/图片的图文动态详情，返回是否失败。
 
     与 backfill-detail 命令共用同一套逻辑；归档顺带调用时 limit=None 全量回填。
@@ -325,6 +334,89 @@ def backfill_detail(
         name = connector.source.name or uid
         typer.echo(f"\n== {name}（uid={uid}）==")
         if _backfill_connector_details(connector, limit=limit):
+            failed = True
+
+    if failed:
+        raise typer.Exit(code=1)
+
+
+def _backfill_connector_videos(connector: Connector, limit: int | None) -> bool:
+    """回填某博主归档中缺字幕正文的视频，返回是否失败。
+
+    与 backfill-subtitle 命令共用同一套逻辑；归档顺带调用时 limit=None 全量回填。
+    未付费的充电专属视频会被标记「付费不可达」并跳过，不再进入待回填列表。
+
+    分批执行（每批换新浏览器会话、逐批落盘）：headless Chromium 长会话偶发
+    停止响应 CDP 导致后续调用永久挂起（实测约 10+ 页后），小批次 + 幂等重跑
+    把单次挂起的损失限制在一批之内。
+    """
+    uid = connector.source.uid
+    pending = [(path, item) for path, item in load_archive_items(uid) if needs_video_detail(item)]
+    if not pending:
+        typer.secho("归档中没有缺字幕的视频", fg=typer.colors.YELLOW)
+        return False
+    if limit is not None:
+        pending = pending[:limit]
+    typer.echo(f"待回填 {len(pending)} 条视频，分批打开播放页（每批 {_VIDEO_BATCH_SIZE} 条）…")
+
+    failed = False
+    for start in range(0, len(pending), _VIDEO_BATCH_SIZE):
+        batch = pending[start : start + _VIDEO_BATCH_SIZE]
+        typer.echo(f"-- 第 {start // _VIDEO_BATCH_SIZE + 1} 批（{len(batch)} 条）")
+        try:
+            details = connector.fetch_video_details([item for _, item in batch])
+        except LoginRequiredError as exc:
+            typer.secho(f"[FAIL] {exc}，请先执行 opinion-radar bilibili-login", fg=typer.colors.RED)
+            return True
+        except RiskControlBlocked as exc:
+            typer.secho(f"[FAIL] 命中风控已熔断：{exc}", fg=typer.colors.RED)
+            return True
+        except (BrowserRuntimeMissingError, CollectorError) as exc:
+            typer.secho(f"[FAIL] 采集失败：{exc}", fg=typer.colors.RED)
+            return True
+
+        written = 0
+        for path, item in batch:
+            detail = details.get(item.external_id)
+            if detail is None:
+                typer.secho(
+                    f"[WARN] 字幕未获取到，跳过：{item.external_id}", fg=typer.colors.YELLOW
+                )
+                continue
+            merged = merge_video_detail(item, detail)
+            overwrite_archive_item(path, merged)
+            status = merged.payload.get("subtitle_status", "ok")
+            body_len = len((merged.body_text or "").strip())
+            typer.echo(f"    {item.external_id} 状态={status} 正文 {body_len} 字")
+            written += 1
+        typer.secho(f"本批完成：更新 {written} 条", fg=typer.colors.GREEN)
+        if written < len(batch):
+            failed = True
+    return failed
+
+
+@app.command("backfill-subtitle")
+def backfill_subtitle(
+    limit: int | None = typer.Option(
+        None, "--limit", help="本轮最多回填条数（风控友好，可分批执行）"
+    ),
+    headed: bool = typer.Option(False, "--headed", help="有头模式运行，便于观察页面与人工介入"),
+) -> None:
+    """回填归档中缺字幕正文的视频（播放页拦截 player 接口，只写本地 data/archive/）。
+
+    仅提取字幕文字，不保存任何视频文件；未付费的充电专属视频标记「付费不可达」。
+    """
+    runtime = _load_or_exit()
+    configure_logging(runtime.app.log_level)
+    if headed:
+        runtime.app.browser.headless = False
+
+    failed = False
+    for connector in build_connectors(runtime):
+        uid = connector.source.uid
+        name = connector.source.name or uid
+        typer.echo(f"\n== {name}（uid={uid}）==")
+        if _backfill_connector_videos(connector, limit=limit):
             failed = True
 
     if failed:
