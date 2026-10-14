@@ -139,13 +139,27 @@ def load_archive_items(
 
 
 def needs_detail(item: ContentItem) -> bool:
-    """图文动态是否缺详情：正文缺失（或仅标题占位）、图片为空任一即需要回填。"""
+    """图文动态是否缺详情：正文缺失（或仅标题占位），或图片类动态缺图片列表。
+
+    纯文字 / 转发 / 专栏动态本身无图，有正文即完整，不再触发详情抓取
+    （否则队列里全是永远补不齐「图」的条目）；
+    图片类（DRAW）有正文却无图说明详情从未抓取——图片列表只能从详情接口获得，
+    需要回填后再由 download_item_images 落盘。
+    """
     if item.content_type is not ContentType.MOMENT:
         return False
     body = (item.body_text or "").strip()
-    has_body = bool(body) and body != item.title.strip()
-    has_images = bool(item.payload.get("image_urls"))
-    return not (has_body and has_images)
+    title = (item.title or "").strip()
+    # 正文为占位（空 / 等于默认标题）才视为缺正文；WORD 动态的 title 就是正文，
+    # body==title 属正常，不误判
+    has_body = bool(body) and not (title == _GENERIC_TITLE and body == title)
+    if not has_body:
+        return True
+    is_draw = item.payload.get("dynamic_type") == "DYNAMIC_TYPE_DRAW"
+    if is_draw and not item.payload.get("image_urls"):
+        # 图片类动态缺图：仅在未抓过详情时回填；已抓取仍无图说明该动态本身无图
+        return item.status is not ProcessingStatus.FETCHED
+    return False
 
 
 def merge_detail(existing: ContentItem, detail: ContentItem) -> ContentItem:

@@ -143,7 +143,13 @@ def _parse_item(raw: dict[str, Any], *, source_uid: str) -> ContentItem | None:
     elif dyn_type in ("DYNAMIC_TYPE_ARTICLE", "DYNAMIC_TYPE_OPUS"):
         item = _parse_article(dynamic_id, major, published_at, source_uid)
     elif dyn_type == "DYNAMIC_TYPE_WORD":
-        item = _build_moment(dynamic_id, text, [], text, published_at, source_uid, dyn_type)
+        # 新版 WORD 动态正文已迁移到 major.opus.summary.text（desc.text 常为空），
+        # 且 opus.pics 可能带图，与 DRAW 共用 _opus_parts 提取
+        _, opus_text, opus_images = _opus_parts(major)
+        body = opus_text or text
+        item = _build_moment(
+            dynamic_id, body, opus_images, body, published_at, source_uid, dyn_type
+        )
     elif dyn_type == "DYNAMIC_TYPE_FORWARD":
         item = _parse_forward(dynamic_id, text, raw, published_at, source_uid)
     else:

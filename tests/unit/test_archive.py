@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -27,7 +28,11 @@ def _moment(
     body: str | None = None,
     images: list[str] | None = None,
     title: str = "图文动态",
+    dynamic_type: str | None = None,
 ) -> ContentItem:
+    payload: dict[str, Any] = {"dynamic_id": external_id, "image_urls": images or []}
+    if dynamic_type:
+        payload["dynamic_type"] = dynamic_type
     return ContentItem(
         platform=Platform.BILIBILI,
         source_id=UID,
@@ -37,17 +42,22 @@ def _moment(
         url=f"https://t.bilibili.com/{external_id}",
         published_at=datetime(2026, 9, 1, tzinfo=UTC),
         body_text=body,
-        payload={"dynamic_id": external_id, "image_urls": images or []},
+        payload=payload,
     )
 
 
 def test_needs_detail_only_for_moments_with_missing_content() -> None:
     assert needs_detail(_moment("1")) is True  # 无正文无图片
-    assert needs_detail(_moment("2", body="有正文")) is True  # 缺图片
+    draw = _moment("2", body="有正文", dynamic_type="DYNAMIC_TYPE_DRAW")
+    assert needs_detail(draw) is True  # 图片类缺图
     assert needs_detail(_moment("3", images=["https://x/pic.jpg"])) is True  # 缺正文
     assert needs_detail(_moment("4", body="正文", images=["https://x/pic.jpg"])) is False
-    # 正文只是标题占位（发现阶段回填）时仍视为缺详情
-    assert needs_detail(_moment("6", body="地产逻辑", title="地产逻辑")) is True
+    # 纯文字 / 转发动态本就无图，有正文即完整
+    assert needs_detail(_moment("7", body="有正文")) is False
+    # 正文只是默认标题占位（发现阶段回填）时仍视为缺详情
+    assert needs_detail(_moment("6", body="图文动态", title="图文动态")) is True
+    # WORD 动态 title 即正文，body==title 属正常不视为占位
+    assert needs_detail(_moment("8", body="地产逻辑", title="地产逻辑")) is False
 
     video = _moment("5", body="正文", images=["https://x/pic.jpg"])
     video.content_type = ContentType.VIDEO
