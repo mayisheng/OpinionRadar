@@ -14,9 +14,21 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
+from pydantic import BaseModel
 
+from opinion_radar.collectors.bilibili.comment import (
+    COMMENT_MAIN_API_MARKER,
+    COMMENT_TYPE_DYNAMIC,
+    COMMENT_TYPE_VIDEO,
+    FlaggedThread,
+    UpReply,
+    build_sub_reply_url,
+    parse_comment_main_page,
+    parse_sub_replies,
+)
 from opinion_radar.collectors.bilibili.feed import (
     DETAIL_API_MARKERS,
     DYNAMIC_URL_TEMPLATE,
@@ -51,6 +63,37 @@ _COOLDOWN_FILENAME = ".bilibili_blocked_until"
 _OLD_STOP_THRESHOLD = 2
 # 连续多少轮滚动没有新响应即判定已到底
 _IDLE_STOP_THRESHOLD = 2
+
+
+class PlayerPageResult(BaseModel):
+    """视频播放页一次访问的产出：player 信息 + 评论区 UP 主回复。"""
+
+    info: PlayerInfo
+    up_replies: list[UpReply]
+    comment_pages: int = 0  # 拦截到的主楼评论页数（0 = 评论区未加载）
+
+
+class DetailPageResult(BaseModel):
+    """动态详情页一次访问的产出：详情条目 + 评论区 UP 主回复。"""
+
+    item: ContentItem
+    up_replies: list[UpReply]
+    comment_pages: int = 0
+
+
+class CommentPageResult(BaseModel):
+    """纯评论回填一次页面访问的产出。"""
+
+    up_replies: list[UpReply]
+    comment_pages: int = 0
+
+
+class CommentTarget(BaseModel):
+    """纯评论回填的目标页面。"""
+
+    external_id: str
+    url: str
+    comment_type: int  # COMMENT_TYPE_VIDEO / COMMENT_TYPE_DYNAMIC
 
 
 class BilibiliBrowser:
@@ -369,22 +412,7 @@ class BilibiliBrowser:
         )
         logger.debug(f"api pagination fetch: offset={offset}")
 
-        # 在页面上下文执行 fetch，浏览器自动带 cookie / 指纹 / wbi 签名
-        result = page.evaluate(
-            """async (url) => {
-                try {
-                    const resp = await fetch(url, {
-                        method: 'GET',
-                        credentials: 'include',
-                        headers: { 'Accept': 'application/json' }
-                    });
-                    return await resp.json();
-                } catch (e) {
-                    return { code: -1, message: String(e) };
-                }
-            }""",
-            url,
-        )
+        result = self._page_fetch_json(page, url)
         if not isinstance(result, dict):
             logger.warning(f"api pagination unexpected result type: {type(result)}")
             return []
@@ -403,18 +431,42 @@ class BilibiliBrowser:
         # 注意：这里只返回当前页数据，调用方负责追加到 captured 列表
         return [result]
 
-    def fetch_dynamic_details(self, dynamic_ids: list[str], *, uid: str) -> dict[str, ContentItem]:
-        """批量打开动态详情页，拦截 detail 响应，返回 dynamic_id → ContentItem。
+    @staticmethod
+    def _page_fetch_json(page: Any, url: str) -> Any:
+        """在页面上下文执行 fetch GET 并返回 JSON（复用浏览器 cookie 与指纹）。
+
+        只读操作，不自行签名、不修改任何状态；风控基线由浏览器会话保持。
+        """
+        return page.evaluate(
+            """async (url) => {
+                try {
+                    const resp = await fetch(url, {
+                        method: 'GET',
+                        credentials: 'include',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    return await resp.json();
+                } catch (e) {
+                    return { code: -1, message: String(e) };
+                }
+            }""",
+            url,
+        )
+
+    def fetch_dynamic_details(
+        self, dynamic_ids: list[str], *, uid: str
+    ) -> dict[str, DetailPageResult]:
+        """批量打开动态详情页，拦截 detail + 主楼评论响应，返回 dynamic_id → DetailPageResult。
 
         单个浏览器会话内逐条访问（条间人类节奏停顿），单条失败只记日志不中断整批；
-        命中风控 / 登录失效仍然熔断抛出。
+        命中风控 / 登录失效仍然熔断抛出。评论采集为顺带行为，失败不影响详情结果。
         """
         self._enforce_cooldown()
         if not self.is_logged_in():
             raise LoginRequiredError("浏览器 profile 未登录：请先执行 opinion-radar bilibili-login")
 
         context = self._require_context()
-        results: dict[str, ContentItem] = {}
+        results: dict[str, DetailPageResult] = {}
         timeout = self.config.detail_response_timeout_seconds
 
         for index, dynamic_id in enumerate(dynamic_ids):
@@ -426,30 +478,32 @@ class BilibiliBrowser:
                         self.config.action_delay_min_seconds,
                         self.config.action_delay_max_seconds,
                     )
-                item = self._fetch_one_detail(page, dynamic_id, uid=uid, timeout=timeout)
+                result = self._fetch_one_detail(page, dynamic_id, uid=uid, timeout=timeout)
             finally:
                 page.close()
-            if item is not None:
-                results[dynamic_id] = item
+            if result is not None:
+                results[dynamic_id] = result
 
         logger.info(f"dynamic_details_done total={len(dynamic_ids)} ok={len(results)}")
         return results
 
     def _fetch_one_detail(
         self, page: Any, dynamic_id: str, *, uid: str, timeout: float
-    ) -> ContentItem | None:
-        """在给定页面上打开单条动态详情页，拦截 detail 响应；失败返回 None。"""
+    ) -> DetailPageResult | None:
+        """在给定页面上打开单条动态详情页，拦截 detail 响应并顺带采评论；失败返回 None。"""
         captured: list[dict[str, Any]] = []
+        comment_captured: list[dict[str, Any]] = []
 
         def _on_response(response: Any) -> None:
-            if not any(marker in response.url for marker in DETAIL_API_MARKERS):
-                return
-            try:
-                payload = response.json()
-            except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
-                logger.debug(f"detail response unreadable: {exc}")
-                return
-            captured.append(payload)
+            if any(marker in response.url for marker in DETAIL_API_MARKERS):
+                try:
+                    payload = response.json()
+                except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
+                    logger.debug(f"detail response unreadable: {exc}")
+                    return
+                captured.append(payload)
+            elif COMMENT_MAIN_API_MARKER in response.url:
+                self._capture_comment_response(response, comment_captured)
 
         page.on("response", _on_response)
         url = DYNAMIC_URL_TEMPLATE.format(dynamic_id=dynamic_id)
@@ -485,22 +539,28 @@ class BilibiliBrowser:
             if item.external_id == dynamic_id:
                 dyn_type = item.payload.get("dynamic_type")
                 logger.info(f"dynamic_detail_ok id={dynamic_id} type={dyn_type}")
-                return item
+                comments = self._collect_comments(
+                    page, comment_captured, up_mid=uid, comment_type=COMMENT_TYPE_DYNAMIC
+                )
+                return DetailPageResult(
+                    item=item, up_replies=comments.up_replies, comment_pages=comments.comment_pages
+                )
         logger.warning(f"dynamic_detail_missing id={dynamic_id} captures={len(captured)}")
         return None
 
-    def fetch_video_players(self, bvids: list[str]) -> dict[str, PlayerInfo]:
-        """逐条打开视频播放页，拦截 player 接口响应，返回 bvid → PlayerInfo。
+    def fetch_video_players(self, bvids: list[str], *, uid: str) -> dict[str, PlayerPageResult]:
+        """逐条打开视频播放页，拦截 player + 主楼评论响应，返回 bvid → PlayerPageResult。
 
         单个浏览器会话内逐条访问（条间人类节奏停顿），单条失败只记日志不中断整批；
         命中风控 / 登录失效仍然熔断抛出。字幕正文下载不在此处（CDN 直连，见 subtitle.py）。
+        评论采集为顺带行为，失败不影响 player 结果。
         """
         self._enforce_cooldown()
         if not self.is_logged_in():
             raise LoginRequiredError("浏览器 profile 未登录：请先执行 opinion-radar bilibili-login")
 
         context = self._require_context()
-        results: dict[str, PlayerInfo] = {}
+        results: dict[str, PlayerPageResult] = {}
         timeout = self.config.detail_response_timeout_seconds
 
         for index, bvid in enumerate(bvids):
@@ -512,28 +572,32 @@ class BilibiliBrowser:
                         self.config.action_delay_min_seconds,
                         self.config.action_delay_max_seconds,
                     )
-                info = self._fetch_one_player(page, bvid, timeout=timeout)
+                result = self._fetch_one_player(page, bvid, uid=uid, timeout=timeout)
             finally:
                 page.close()
-            if info is not None:
-                results[bvid] = info
+            if result is not None:
+                results[bvid] = result
 
         logger.info(f"video_players_done total={len(bvids)} ok={len(results)}")
         return results
 
-    def _fetch_one_player(self, page: Any, bvid: str, *, timeout: float) -> PlayerInfo | None:
-        """在给定页面上打开单个视频播放页，拦截 player 响应；失败返回 None。"""
+    def _fetch_one_player(
+        self, page: Any, bvid: str, *, uid: str, timeout: float
+    ) -> PlayerPageResult | None:
+        """在给定页面上打开单个视频播放页，拦截 player 响应并顺带采评论；失败返回 None。"""
         captured: list[dict[str, Any]] = []
+        comment_captured: list[dict[str, Any]] = []
 
         def _on_response(response: Any) -> None:
-            if not any(marker in response.url for marker in PLAYER_API_MARKERS):
-                return
-            try:
-                payload = response.json()
-            except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
-                logger.debug(f"player response unreadable: {exc}")
-                return
-            captured.append(payload)
+            if any(marker in response.url for marker in PLAYER_API_MARKERS):
+                try:
+                    payload = response.json()
+                except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
+                    logger.debug(f"player response unreadable: {exc}")
+                    return
+                captured.append(payload)
+            elif COMMENT_MAIN_API_MARKER in response.url:
+                self._capture_comment_response(response, comment_captured)
 
         page.on("response", _on_response)
         url = VIDEO_URL_TEMPLATE.format(bvid=bvid)
@@ -571,9 +635,214 @@ class BilibiliBrowser:
                     f"video_player_ok bvid={bvid} paid={info.is_paid} "
                     f"playable={info.paid_playable} lan={info.subtitle_lan}"
                 )
-                return info
+                if info.is_paid and not info.paid_playable:
+                    # 合规红线：未付费的充电专属视频不采评论，直接返回空结果
+                    return PlayerPageResult(info=info, up_replies=[], comment_pages=0)
+                comments = self._collect_comments(
+                    page, comment_captured, up_mid=uid, comment_type=COMMENT_TYPE_VIDEO
+                )
+                return PlayerPageResult(
+                    info=info, up_replies=comments.up_replies, comment_pages=comments.comment_pages
+                )
         logger.warning(f"video_player_missing bvid={bvid} captures={len(captured)}")
         return None
+
+    def fetch_comments_batch(
+        self, targets: list[CommentTarget], *, uid: str
+    ) -> dict[str, CommentPageResult]:
+        """纯评论回填：逐条打开目标页面只采评论区 UP 主回复，返回 external_id → 结果。
+
+        用于已归档（已有正文 / 字幕）条目的评论补采；单条失败记日志且不收录该条
+        （调用方据此标记 error 下轮重试），命中风控 / 登录失效熔断抛出。
+        """
+        self._enforce_cooldown()
+        if not self.is_logged_in():
+            raise LoginRequiredError("浏览器 profile 未登录：请先执行 opinion-radar bilibili-login")
+
+        context = self._require_context()
+        results: dict[str, CommentPageResult] = {}
+
+        for index, target in enumerate(targets):
+            page = context.new_page()
+            try:
+                if index > 0:
+                    self._human_pause(
+                        page,
+                        self.config.action_delay_min_seconds,
+                        self.config.action_delay_max_seconds,
+                    )
+                result = self._fetch_one_comments(page, target, uid=uid)
+            finally:
+                page.close()
+            if result is not None:
+                results[target.external_id] = result
+
+        logger.info(f"comments_batch_done total={len(targets)} ok={len(results)}")
+        return results
+
+    def _fetch_one_comments(
+        self, page: Any, target: CommentTarget, *, uid: str
+    ) -> CommentPageResult | None:
+        """在给定页面上打开目标页面并只采集评论区 UP 主回复；失败返回 None。"""
+        comment_captured: list[dict[str, Any]] = []
+
+        def _on_response(response: Any) -> None:
+            if COMMENT_MAIN_API_MARKER in response.url:
+                self._capture_comment_response(response, comment_captured)
+
+        page.on("response", _on_response)
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+        try:
+            try:
+                page.goto(target.url, wait_until="domcontentloaded")
+            except PlaywrightTimeoutError as exc:
+                raise CollectorTimeout(f"打开页面超时：{target.url}") from exc
+            except PlaywrightError as exc:
+                raise CollectorError(f"浏览器打开页面失败：{exc}") from exc
+            self._raise_if_blocked(page)
+            return self._collect_comments(
+                page, comment_captured, up_mid=uid, comment_type=target.comment_type
+            )
+        except RiskControlBlocked:
+            self._write_cooldown()
+            raise
+        except CollectorError as exc:
+            logger.warning(f"comments_failed id={target.external_id} error={exc}")
+            return None
+
+    @staticmethod
+    def _capture_comment_response(response: Any, comment_captured: list[dict[str, Any]]) -> None:
+        """拦截主楼评论响应（带 URL，楼中楼 fetch 需要从 URL 取 oid）。"""
+        try:
+            payload = response.json()
+        except Exception as exc:  # 跳转/中止的响应可能拿不到 body，忽略即可
+            logger.debug(f"comment response unreadable: {exc}")
+            return
+        comment_captured.append({"url": response.url, "payload": payload})
+
+    def _collect_comments(
+        self,
+        page: Any,
+        comment_captured: list[dict[str, Any]],
+        *,
+        up_mid: str,
+        comment_type: int,
+    ) -> CommentPageResult:
+        """滚动触发评论区加载并提取 UP 主回复；失败不致命（返回已采到的部分）。"""
+        try:
+            self._scroll_to_comments(page, comment_captured)
+            if not comment_captured:
+                logger.info("comment_main_not_captured: 滚动上限内未加载到评论区")
+                return CommentPageResult(up_replies=[], comment_pages=0)
+            replies = self._extract_up_replies(
+                page, comment_captured, up_mid=up_mid, comment_type=comment_type
+            )
+            return CommentPageResult(up_replies=replies, comment_pages=len(comment_captured))
+        except (RiskControlBlocked, LoginRequiredError):
+            self._write_cooldown()
+            raise
+        except CollectorError as exc:
+            logger.warning(f"comment_collect_failed error={exc}")
+            return CommentPageResult(up_replies=[], comment_pages=len(comment_captured))
+
+    def _scroll_to_comments(self, page: Any, comment_captured: list[dict[str, Any]]) -> None:
+        """人类节奏滚动页面直到拦截到主楼评论响应（或达页数 / 滚动上限、页面到底）。"""
+        scrolls = 0
+        while (
+            len(comment_captured) < self.config.max_comment_pages
+            and scrolls < self.config.max_comment_scrolls
+        ):
+            baseline = len(comment_captured)
+            self._human_pause(
+                page, self.config.action_delay_min_seconds, self.config.action_delay_max_seconds
+            )
+            page.mouse.wheel(0, random.randint(1200, 3200))
+            scrolls += 1
+            got_new = self._wait_captures(page, comment_captured, baseline, timeout_seconds=4.0)
+            if self._at_page_bottom(page) and not got_new:
+                break
+
+    def _extract_up_replies(
+        self,
+        page: Any,
+        comment_captured: list[dict[str, Any]],
+        *,
+        up_mid: str,
+        comment_type: int,
+    ) -> list[UpReply]:
+        """解析主楼页并展开 up_reply 标记楼的楼中楼，返回去重后的 UP 主回复。"""
+        replies: list[UpReply] = []
+        seen: set[str] = set()
+        flagged: list[FlaggedThread] = []
+        flagged_seen: set[str] = set()
+        oid = ""
+        for capture in comment_captured[: self.config.max_comment_pages]:
+            main = parse_comment_main_page(capture["payload"], up_mid=up_mid)
+            if not oid:
+                oid = main.oid or self._oid_from_comment_url(capture["url"])
+            for reply in main.up_replies:
+                if reply.rpid not in seen:
+                    seen.add(reply.rpid)
+                    replies.append(reply)
+            for thread in main.flagged:
+                if thread.rpid not in flagged_seen:
+                    flagged_seen.add(thread.rpid)
+                    flagged.append(thread)
+        if not oid:
+            logger.warning("comment_oid_missing: 无法确定评论对象 id，跳过楼中楼展开")
+            return replies
+        for thread in flagged[: self.config.max_flagged_threads]:
+            for reply in self._fetch_thread_up_replies(
+                page, oid, comment_type, thread, up_mid=up_mid
+            ):
+                if reply.rpid not in seen:
+                    seen.add(reply.rpid)
+                    replies.append(reply)
+        logger.info(
+            f"comment_extract_done main_pages={len(comment_captured)} "
+            f"flagged={len(flagged)} up_replies={len(replies)}"
+        )
+        return replies
+
+    def _fetch_thread_up_replies(
+        self,
+        page: Any,
+        oid: str,
+        comment_type: int,
+        thread: FlaggedThread,
+        *,
+        up_mid: str,
+    ) -> list[UpReply]:
+        """页面上下文 fetch 展开单个标记楼的楼中楼（免签名），过滤 UP 主回复。"""
+        results: list[UpReply] = []
+        for pn in range(1, self.config.max_subreply_pages + 1):
+            url = build_sub_reply_url(oid, comment_type, thread.rpid, pn)
+            payload = self._page_fetch_json(page, url)
+            if not isinstance(payload, dict):
+                logger.warning(f"sub_reply_unexpected root={thread.rpid} type={type(payload)}")
+                break
+            # parse_sub_replies 内部做业务码检查，风控 / 登录态异常会向上抛出熔断
+            sub, has_more = parse_sub_replies(
+                payload, up_mid=up_mid, root_rpid=thread.rpid, root_message=thread.message
+            )
+            results.extend(sub)
+            if not has_more:
+                break
+            self._human_pause(
+                page, self.config.action_delay_min_seconds, self.config.action_delay_max_seconds
+            )
+        return results
+
+    @staticmethod
+    def _oid_from_comment_url(url: str) -> str:
+        """从主楼评论请求 URL 的 query 中取 oid（视频 aid / 动态 dynamic_id）。"""
+        try:
+            params = parse_qs(urlparse(url).query)
+        except Exception:
+            return ""
+        return (params.get("oid") or [""])[0]
 
     def _raise_if_blocked(self, page: Any) -> None:
         """检查登录跳转与验证码弹层，命中即抛风控 / 登录异常。"""

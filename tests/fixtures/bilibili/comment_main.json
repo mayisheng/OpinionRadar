@@ -1,0 +1,163 @@
+{
+  "code": 0,
+  "message": "OK",
+  "ttl": 1,
+  "data": {
+    "cursor": {
+      "is_begin": true,
+      "is_end": false,
+      "prev": 0,
+      "next": 0,
+      "all_count": 256,
+      "mode": 3,
+      "pagination_reply": {
+        "next_offset": "FAKE_OFFSET_TOKEN_PAGE2"
+      }
+    },
+    "replies": [
+      {
+        "rpid": 900000000001,
+        "rpid_str": "900000000001",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "mid": 555001,
+        "mid_str": "555001",
+        "member": {
+          "mid": "555001",
+          "uname": "粉丝甲",
+          "avatar": "https://i0.hdslb.com/bfs/face/fake1.jpg"
+        },
+        "content": {
+          "message": "老师讲得真好，请问现在还能上车吗？",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "rcount": 2,
+        "replies": [],
+        "like": 10,
+        "ctime": 1757000000,
+        "up_action": { "like": false, "reply": false },
+        "reply_control": {
+          "max_line": 6,
+          "sub_reply_entry_text": "共2条回复",
+          "time_desc": "35天前发布"
+        }
+      },
+      {
+        "rpid": 900000000002,
+        "rpid_str": "900000000002",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "mid": 555002,
+        "mid_str": "555002",
+        "member": {
+          "mid": "555002",
+          "uname": "粉丝乙",
+          "avatar": "https://i0.hdslb.com/bfs/face/fake2.jpg"
+        },
+        "content": {
+          "message": "这个指标在哪里能查到？",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "rcount": 18,
+        "replies": [
+          {
+            "rpid": 900000000101,
+            "rpid_str": "900000000101",
+            "oid": 11111111111,
+            "oid_str": "11111111111",
+            "root": 900000000002,
+            "root_str": "900000000002",
+            "mid": 9999999999,
+            "mid_str": "9999999999",
+            "member": {
+              "mid": "9999999999",
+              "uname": "测试UP主",
+              "avatar": "https://i0.hdslb.com/bfs/face/fakeup.jpg"
+            },
+            "content": {
+              "message": "在官网的月度数据里，回复一下示意。",
+              "members": [],
+              "jump_url": {},
+              "max_line": 6
+            },
+            "like": 46,
+            "ctime": 1757100000,
+            "up_action": { "like": false, "reply": false },
+            "reply_control": {}
+          }
+        ],
+        "like": 30,
+        "ctime": 1757050000,
+        "up_action": { "like": false, "reply": true },
+        "reply_control": {
+          "up_reply": true,
+          "max_line": 6,
+          "sub_reply_entry_text": "共18条回复",
+          "time_desc": "35天前发布"
+        }
+      },
+      {
+        "rpid": 900000000003,
+        "rpid_str": "900000000003",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "mid": 9999999999,
+        "mid_str": "9999999999",
+        "member": {
+          "mid": "9999999999",
+          "uname": "测试UP主",
+          "avatar": "https://i0.hdslb.com/bfs/face/fakeup.jpg"
+        },
+        "content": {
+          "message": "补充一下：数据来源见简介。",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "rcount": 0,
+        "replies": [],
+        "like": 88,
+        "ctime": 1757200000,
+        "up_action": { "like": false, "reply": false },
+        "reply_control": {
+          "max_line": 6,
+          "time_desc": "30天前发布"
+        }
+      }
+    ],
+    "top_replies": [
+      {
+        "rpid": 900000000004,
+        "rpid_str": "900000000004",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "mid": 9999999999,
+        "mid_str": "9999999999",
+        "member": {
+          "mid": "9999999999",
+          "uname": "测试UP主",
+          "avatar": "https://i0.hdslb.com/bfs/face/fakeup.jpg"
+        },
+        "content": {
+          "message": "置顶说明：周末加更一期。",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "rcount": 0,
+        "replies": [],
+        "like": 100,
+        "ctime": 1757300000,
+        "up_action": { "like": false, "reply": false },
+        "reply_control": {}
+      }
+    ],
+    "upper": { "mid": 9999999999 },
+    "config": {},
+    "control": {}
+  }
+}

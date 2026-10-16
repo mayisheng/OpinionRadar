@@ -1,0 +1,115 @@
+{
+  "code": 0,
+  "message": "OK",
+  "ttl": 1,
+  "data": {
+    "page": {
+      "num": 1,
+      "size": 20,
+      "count": 3
+    },
+    "upper": { "mid": 9999999999 },
+    "replies": [
+      {
+        "rpid": 900000000101,
+        "rpid_str": "900000000101",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "root": 900000000002,
+        "root_str": "900000000002",
+        "parent": 900000000002,
+        "parent_str": "900000000002",
+        "mid": 9999999999,
+        "mid_str": "9999999999",
+        "member": {
+          "mid": "9999999999",
+          "uname": "测试UP主",
+          "avatar": "https://i0.hdslb.com/bfs/face/fakeup.jpg"
+        },
+        "content": {
+          "message": "在官网的月度数据里，回复一下示意。",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "like": 46,
+        "ctime": 1757100000,
+        "up_action": { "like": false, "reply": false },
+        "reply_control": {}
+      },
+      {
+        "rpid": 900000000102,
+        "rpid_str": "900000000102",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "root": 900000000002,
+        "root_str": "900000000002",
+        "parent": 900000000101,
+        "parent_str": "900000000101",
+        "mid": 555003,
+        "mid_str": "555003",
+        "member": {
+          "mid": "555003",
+          "uname": "粉丝丙",
+          "avatar": "https://i0.hdslb.com/bfs/face/fake3.jpg"
+        },
+        "content": {
+          "message": "谢谢回复！",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "like": 2,
+        "ctime": 1757110000,
+        "up_action": { "like": false, "reply": false },
+        "reply_control": {}
+      },
+      {
+        "rpid": 900000000103,
+        "rpid_str": "900000000103",
+        "oid": 11111111111,
+        "oid_str": "11111111111",
+        "root": 900000000002,
+        "root_str": "900000000002",
+        "parent": 900000000002,
+        "parent_str": "900000000002",
+        "mid": 555004,
+        "mid_str": "555004",
+        "member": {
+          "mid": "555004",
+          "uname": "粉丝丁",
+          "avatar": "https://i0.hdslb.com/bfs/face/fake4.jpg"
+        },
+        "content": {
+          "message": "插个眼，回头再看。",
+          "members": [],
+          "jump_url": {},
+          "max_line": 6
+        },
+        "like": 1,
+        "ctime": 1757120000,
+        "up_action": { "like": false, "reply": false },
+        "reply_control": {}
+      }
+    ],
+    "root": {
+      "rpid": 900000000002,
+      "rpid_str": "900000000002",
+      "mid": 555002,
+      "mid_str": "555002",
+      "member": {
+        "mid": "555002",
+        "uname": "粉丝乙",
+        "avatar": "https://i0.hdslb.com/bfs/face/fake2.jpg"
+      },
+      "content": {
+        "message": "这个指标在哪里能查到？",
+        "members": [],
+        "jump_url": {},
+        "max_line": 6
+      }
+    },
+    "config": {},
+    "control": {}
+  }
+}

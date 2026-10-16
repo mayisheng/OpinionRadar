@@ -7,6 +7,7 @@
     opinion-radar archive           回溯归档：抓取指定年份以来全部动态，写入本地 JSON
     opinion-radar backfill-detail   回填归档中缺正文/图片的图文动态详情
     opinion-radar backfill-subtitle 回填归档中缺字幕正文的视频（播放页拦截）
+    opinion-radar backfill-comments 回填归档中缺评论区 UP 主回复的条目（拼入正文）
     opinion-radar run --dry-run     演练模式：只打印管线计划
     opinion-radar run               执行一次采集 → 提取 → 分析 → 推送（迭代 001）
     opinion-radar digest            生成并推送每日观点汇总（迭代 004）
@@ -40,8 +41,10 @@ from opinion_radar.storage.archive import (
     archive_items,
     download_item_images,
     load_archive_items,
+    merge_comments,
     merge_detail,
     merge_video_detail,
+    needs_comments,
     needs_detail,
     needs_video_detail,
     overwrite_archive_item,
@@ -52,6 +55,8 @@ app = typer.Typer(add_completion=False, no_args_is_help=True, help="B 站财经�
 
 # 视频字幕回填的批大小：每批一个新浏览器会话，规避长会话 CDP 挂起（见 _backfill_connector_videos）
 _VIDEO_BATCH_SIZE = 5
+# 评论回填的批大小：同字幕分批逻辑，长会话分批 + 逐批落盘
+_COMMENT_BATCH_SIZE = 5
 
 
 def _version_callback(value: bool) -> None:
@@ -417,6 +422,83 @@ def backfill_subtitle(
         name = connector.source.name or uid
         typer.echo(f"\n== {name}（uid={uid}）==")
         if _backfill_connector_videos(connector, limit=limit):
+            failed = True
+
+    if failed:
+        raise typer.Exit(code=1)
+
+
+def _backfill_connector_comments(connector: Connector, limit: int | None) -> bool:
+    """回填某博主归档中缺评论区 UP 主回复的条目，返回是否失败。
+
+    与 backfill-comments 命令共用同一套逻辑。分批执行（每批换新浏览器会话、
+    逐批落盘）；评论段落按幂等规则拼入已有正文（merge_comments）。
+    """
+    uid = connector.source.uid
+    pending = [(path, item) for path, item in load_archive_items(uid) if needs_comments(item)]
+    if not pending:
+        typer.secho("归档中没有缺评论的条目", fg=typer.colors.YELLOW)
+        return False
+    if limit is not None:
+        pending = pending[:limit]
+    typer.echo(f"待回填 {len(pending)} 条评论，分批打开页面（每批 {_COMMENT_BATCH_SIZE} 条）…")
+
+    failed = False
+    for start in range(0, len(pending), _COMMENT_BATCH_SIZE):
+        batch = pending[start : start + _COMMENT_BATCH_SIZE]
+        typer.echo(f"-- 第 {start // _COMMENT_BATCH_SIZE + 1} 批（{len(batch)} 条）")
+        try:
+            details = connector.fetch_comments([item for _, item in batch])
+        except LoginRequiredError as exc:
+            typer.secho(f"[FAIL] {exc}，请先执行 opinion-radar bilibili-login", fg=typer.colors.RED)
+            return True
+        except RiskControlBlocked as exc:
+            typer.secho(f"[FAIL] 命中风控已熔断：{exc}", fg=typer.colors.RED)
+            return True
+        except (BrowserRuntimeMissingError, CollectorError) as exc:
+            typer.secho(f"[FAIL] 采集失败：{exc}", fg=typer.colors.RED)
+            return True
+
+        for path, item in batch:
+            detail = details.get(item.external_id)
+            if detail is None:
+                typer.secho(
+                    f"[WARN] 评论未获取到，跳过：{item.external_id}", fg=typer.colors.YELLOW
+                )
+                failed = True
+                continue
+            merged = merge_comments(item, detail)
+            overwrite_archive_item(path, merged)
+            status = merged.payload.get("comment_status", "?")
+            count = merged.payload.get("up_reply_count", 0)
+            typer.echo(f"    {item.external_id} 状态={status} UP主回复 {count} 条")
+        typer.secho("本批完成", fg=typer.colors.GREEN)
+    return failed
+
+
+@app.command("backfill-comments")
+def backfill_comments(
+    limit: int | None = typer.Option(
+        None, "--limit", help="本轮最多回填条数（风控友好，可分批执行）"
+    ),
+    headed: bool = typer.Option(False, "--headed", help="有头模式运行，便于观察页面与人工介入"),
+) -> None:
+    """回填归档中缺评论区 UP 主回复的条目（拼入正文，只写本地 data/archive/）。
+
+    只提取 UP 主本人的回复文本与被回复评论的文本上下文，不采集粉丝昵称等信息；
+    未付费的充电专属视频跳过评论采集。
+    """
+    runtime = _load_or_exit()
+    configure_logging(runtime.app.log_level)
+    if headed:
+        runtime.app.browser.headless = False
+
+    failed = False
+    for connector in build_connectors(runtime):
+        uid = connector.source.uid
+        name = connector.source.name or uid
+        typer.echo(f"\n== {name}（uid={uid}）==")
+        if _backfill_connector_comments(connector, limit=limit):
             failed = True
 
     if failed:

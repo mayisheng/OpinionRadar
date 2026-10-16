@@ -56,3 +56,10 @@ class Connector(ABC):
         仅支持视频内容的平台实现需要覆写；默认视为不支持。
         """
         raise NotImplementedError("当前平台不支持视频详情抓取")
+
+    def fetch_comments(self, items: list[ContentItem]) -> dict[str, ContentItem]:
+        """批量采集评论区 UP 主回复，返回 external_id → 带评论段落的条目副本。
+
+        仅支持评论采集的平台实现需要覆写；默认视为不支持。
+        """
+        raise NotImplementedError("当前平台不支持评论采集")

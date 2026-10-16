@@ -68,6 +68,11 @@ class BrowserConfig(BaseModel):
     login_timeout_seconds: float = 300.0
     # 触发风控熔断后的冷却时间，期间不再启动浏览器采集
     block_cooldown_minutes: int = 1440
+    # 评论区采集上限：触发加载的滚动次数 / 主楼页数 / 单条内容展开的标记楼数 / 每楼楼中楼页数
+    max_comment_scrolls: int = 10
+    max_comment_pages: int = 3
+    max_flagged_threads: int = 10
+    max_subreply_pages: int = 3
 
 
 class LLMConfig(BaseModel):

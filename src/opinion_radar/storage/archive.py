@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import httpx
 from loguru import logger
 
+from opinion_radar.collectors.bilibili.comment import COMMENT_ERROR, COMMENT_SECTION_TITLE
 from opinion_radar.domain.models import ContentItem, ContentType, ProcessingStatus
 from opinion_radar.utils.http import create_client
 
@@ -211,9 +212,45 @@ def merge_video_detail(existing: ContentItem, detail: ContentItem) -> ContentIte
     if detail.is_paid:
         merged.is_paid = True
     merged_payload = dict(merged.payload)
-    for key in ("subtitle_status", "subtitle_lan"):
+    for key in ("subtitle_status", "subtitle_lan", "comment_status", "up_reply_count"):
         value = detail.payload.get(key)
-        if value:
+        if value is not None:
+            merged_payload[key] = value
+    merged.payload = merged_payload
+    if (merged.body_text or "").strip() and merged.status is ProcessingStatus.DISCOVERED:
+        merged.status = ProcessingStatus.FETCHED
+    return merged
+
+
+def needs_comments(item: ContentItem) -> bool:
+    """条目是否缺评论区 UP 主回复采集：无评论状态或上轮失败（error 可重试）。
+
+    终态（ok / empty / skipped_paid）不再重试；未付费的充电专属视频
+    （老归档无 comment_status，按字幕终态识别）红线禁止采集，直接跳过。
+    """
+    if item.content_type not in (ContentType.VIDEO, ContentType.MOMENT):
+        return False
+    if item.payload.get("subtitle_status") == "paid_unreachable":
+        return False
+    status = item.payload.get("comment_status")
+    return status is None or status == COMMENT_ERROR
+
+
+def merge_comments(existing: ContentItem, detail: ContentItem) -> ContentItem:
+    """把评论回填条目的「评论区 UP 主回复」段落与采集状态合并进已有条目。
+
+    幂等：正文已含段落标题（COMMENT_SECTION_TITLE）时不重复拼接；
+    评论状态以本次回填为准（含 error 标记，下轮可据此重试）。
+    """
+    merged = existing.model_copy(deep=True)
+    section = str(detail.payload.get("up_replies_section") or "").strip()
+    body = (merged.body_text or "").strip()
+    if section and COMMENT_SECTION_TITLE not in body:
+        merged.body_text = f"{body}\n\n{section}" if body else section
+    merged_payload = dict(merged.payload)
+    for key in ("comment_status", "up_reply_count"):
+        value = detail.payload.get(key)
+        if value is not None:
             merged_payload[key] = value
     merged.payload = merged_payload
     if (merged.body_text or "").strip() and merged.status is ProcessingStatus.DISCOVERED:
